@@ -1,0 +1,47 @@
+1. Team Number
+    011-03
+2. Team Name
+    The Data Models
+3. Team Members
+    Justin Sorrells
+    Heloisa D'Incao
+    Emily McIntyre
+    Wallace McGuire
+    Charlie Copp
+4. Application Name
+    ModelScope
+5. Application Description
+    Our application is designed to simplify the process of data modeling by allowing users to upload a CSV file and 
+    automatically generate an appropriate model based on the structure and characteristics of their data. Rather than 
+    requiring users to manually select and configure modeling techniques, the system will intelligently determine a 
+    suitable modeling approach and produce results that can be explored and interpreted. This makes the tool accessible to 
+    users with varying levels of technical experience while still providing meaningful insights from their data.
+
+    In addition to model generation, the application provides a structured way for users to manage their work. Each user 
+    will have a personal profile where they can save and organize their models as individual projects within separate 
+    folders. This allows users to revisit previous analyses, compare results, and build upon past work without needing to 
+    start from scratch. By combining automated modeling with organized project management, the application offers both 
+    efficiency and long-term usability for data-driven workflows.
+6. Audience
+    Our application is designed for students, early-career professionals, and non-experts who need to perform data analysis
+    but may not have a strong background in data science or machine learning. An ideal user is someone working with 
+    datasets, such as CSV files from class projects, research, or business tasks, who wants to quickly generate meaningful 
+    models without needing to write code or understand complex modeling techniques. These users are often time-constrained 
+    and value tools that are intuitive, efficient, and easy to learn.
+7. Vision Statement
+    For students and early-career professionals who need quick insights from data, ModelScope is an automated modeling 
+    application that turns CSV files into meaningful models with minimal effort. Unlike traditional tools, it simplifies 
+    the process by automatically selecting models and organizing results in an intuitive workspace.
+
+10. Communication Plan
+    Our team will use Slack as our primary communication and collaboration tool throughout the project. We will create 
+    dedicated channels for different aspects of the project to coordinate work, share updates, and communicate efficiently 
+    with team members and the TA.
+
+11. Meeting Plan
+    Meetings with our group are on Thursdays from 3:30 - 4:30 and will be in person as long as people are around with the 
+    option to meet on zoom if needed.
+
+    Meetings with our TA will be briefly before our Team meetings from 3:15 - 3:30. This will also be in person as long as
+    people are around with the option to hop on zoom if needed.
+
