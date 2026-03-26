@@ -1,0 +1,31 @@
+Potential Risks and Mitigation Strategies
+
+1. Project/Data Size
+
+Since users can import their own data files, very large files could slow down the website or make it difficult for other users to access the service. To mitigate this, we may implement a maximum file size limit. We could also automatically delete files after a certain period of time to save storage space. Users would need to consent to this policy before using the site.
+
+Severity: High. We do not want user-submitted data to negatively affect the performance of the site or cause the program to crash, which could disrupt the experience for other users or potentially damage our database.
+
+2. Security
+
+Users will be uploading data that may be private, so it is important that we protect both their data and their login information. To address this, we plan to implement security measures such as preventing SQL injection attacks and protecting user authentication data.
+
+Severity: Medium to High. User privacy is very important, and we must ensure that their data and login information cannot be accessed by unauthorized individuals—especially if users reuse passwords on other sites.
+
+3. Inappropriate Usage
+
+Because users can input their own text and files, there is a possibility that someone may enter inappropriate or offensive content. If such content were exported from our site and associated with our platform, it could reflect poorly on our project. One possible mitigation strategy is implementing a word-filter system that scans for banned words and alerts the user if inappropriate language is detected.
+
+Severity: Low. This is less of a concern because the platform does not currently include user interaction or sharing features. Users will primarily see only the content that they themselves create.
+
+4. Cost
+
+Running algorithms on large datasets requires significant computing resources and storage, both of which may increase operational costs. To help manage this, we may limit the size of uploaded datasets or restrict how many graphs or analyses a user can generate at one time.
+
+Severity: High. Preventing unnecessary computational and storage costs is important. Optimizing how data is accepted and processed will help reduce these expenses.
+
+5. Scope Creep
+
+Our team may develop unclear specifications or overly ambitious goals that could result in an incomplete project. We have many ideas for the system, but we want to ensure that the final product is polished and functional rather than overly complex.
+
+Severity: Medium. Our primary goal is to create a working project. The core features of our data modeling system are feasible to complete within the given timeframe, and we will prioritize those before adding additional features.
