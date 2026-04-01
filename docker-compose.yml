@@ -1,0 +1,27 @@
+services:
+  server:
+    build:
+      context: ./server
+    container_name: modelscope-server
+    ports:
+      - "5001:5001"
+    environment:
+      PORT: 5001
+      CLIENT_ORIGIN: http://localhost:5173
+    volumes:
+      - ./server:/app
+      - /app/node_modules
+
+  client:
+    build:
+      context: ./client
+    container_name: modelscope-client
+    depends_on:
+      - server
+    ports:
+      - "5173:5173"
+    environment:
+      VITE_API_URL: http://localhost:5001
+    volumes:
+      - ./client:/app
+      - /app/node_modules
