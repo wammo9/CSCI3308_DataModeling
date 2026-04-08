@@ -11,8 +11,8 @@ ModelScope
 - Actual execution environment used for observations on April 8, 2026: local machine in the project workspace
 
 ## User Acceptance Testers
-- Elizabeth McGuire, project team member, acting as primary acceptance tester
-- One additional student teammate or peer reviewer should repeat the same steps to confirm that the workflow is understandable to a first-time user
+- Charlie Copp, primary acceptance tester
+- Wallis McGuire, secondary acceptance tester
 
 ## Test Data
 - API health test data: no input payload is required
