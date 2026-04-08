@@ -27,3 +27,11 @@ app.get("/api/features", (_req, res) => {
 app.listen(port, () => {
   console.log(`Server listening on port ${port}`);
 });
+
+app.get('/welcome', (req, res) => {
+  res.json({status: 'success', message: 'Welcome!'});
+});
+
+module.exports = app.listen(3000);
+// export default app.listen(3000);
+
