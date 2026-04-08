@@ -28,7 +28,7 @@ services:
       - "5001:5001"
     environment:
       PORT: 5001
-      CLIENT_ORIGIN: http://localhost:5173
+      CLIENT_ORIGIN: http://127.0.0.1:5173
       DATABASE_URL: postgres://postgres:pwd@db:5432/modelscope_db
       JWT_SECRET: modelscope-jwt-secret-change-in-production
       NODE_ENV: development
@@ -45,7 +45,7 @@ services:
     ports:
       - "5173:5173"
     environment:
-      VITE_API_URL: http://localhost:5001
+      VITE_API_URL: http://127.0.0.1:5001
     volumes:
       - ./client:/app
       - /app/node_modules
