@@ -1,70 +1,128 @@
-import { useEffect, useState } from "react";
+import { BrowserRouter, Routes, Route, Navigate, NavLink, useNavigate } from "react-router-dom";
+import Login from "./pages/Login";
+import Register from "./pages/Register";
+import Projects from "./pages/Projects";
+import Visualize from "./pages/Visualize";
 
-const apiBaseUrl = import.meta.env.VITE_API_URL || "http://localhost:5001";
+// ── Auth helpers ──────────────────────────────────────────────────────────────
 
-function App() {
-  const [status, setStatus] = useState("Loading API status...");
-  const [features, setFeatures] = useState([]);
+export function getToken() {
+  return localStorage.getItem("ms_token");
+}
 
-  useEffect(() => {
-    async function loadData() {
-      try {
-        const [healthResponse, featuresResponse] = await Promise.all([
-          fetch(`${apiBaseUrl}/api/health`),
-          fetch(`${apiBaseUrl}/api/features`)
-        ]);
+export function setToken(token) {
+  localStorage.setItem("ms_token", token);
+}
 
-        const health = await healthResponse.json();
-        const featureList = await featuresResponse.json();
+export function clearToken() {
+  localStorage.removeItem("ms_token");
+}
 
-        setStatus(health.message);
-        setFeatures(featureList);
-      } catch (error) {
-        setStatus("Unable to reach the API. Start the Docker services to connect the stack.");
-        setFeatures([]);
-      }
-    }
+// ── Protected route wrapper ───────────────────────────────────────────────────
 
-    loadData();
-  }, []);
+function Protected({ children }) {
+  return getToken() ? children : <Navigate to="/login" replace />;
+}
+
+// ── Navbar ────────────────────────────────────────────────────────────────────
+
+function Navbar() {
+  const navigate = useNavigate();
+  const loggedIn = !!getToken();
+
+  function handleLogout() {
+    clearToken();
+    navigate("/login");
+  }
 
   return (
-    <>
     <nav className="navbar">
-      <div>ModelScope</div>
-      <div>
-        <a href="/">Home</a>
-        <a href="/projects">Projects</a>
-        <a href="/upload">Upload</a>
+      <NavLink to="/" className="navbar-brand">
+        ModelScope
+      </NavLink>
+      <div className="navbar-links">
+        {loggedIn ? (
+          <>
+            <NavLink to="/projects">Projects</NavLink>
+            <button className="btn-link" onClick={handleLogout}>
+              Log out
+            </button>
+          </>
+        ) : (
+          <>
+            <NavLink to="/login">Login</NavLink>
+            <NavLink to="/register">Register</NavLink>
+          </>
+        )}
       </div>
     </nav>
-    
+  );
+}
+
+// ── Home page ─────────────────────────────────────────────────────────────────
+
+function Home() {
+  return (
     <main className="app-shell">
-          
       <section className="hero">
         <p className="eyebrow">CSCI 3308</p>
         <h1>ModelScope</h1>
         <p className="lead">
-          An Express and React starter for turning CSV uploads into approachable
-          data modeling workflows.
+          Upload a CSV, run principal component analysis, and explore your data
+          in an interactive 3-D scatter plot — all in the browser.
         </p>
-        <div className="status-card">
-          <span className="status-label">API status</span>
-          <strong>{status}</strong>
+        <div className="hero-actions">
+          <NavLink to="/register" className="btn btn-primary">
+            Get started
+          </NavLink>
+          <NavLink to="/login" className="btn btn-ghost">
+            Sign in
+          </NavLink>
         </div>
       </section>
 
       <section className="feature-panel">
-        <h2>Starter feature map</h2>
+        <h2>What ModelScope does</h2>
         <ul>
-          {features.map((feature) => (
-            <li key={feature}>{feature}</li>
-          ))}
+          <li>Upload CSV datasets with quantitative columns</li>
+          <li>Automatically detects numeric features and removes invalid rows</li>
+          <li>Runs PCA and reduces to 2 or 3 principal components</li>
+          <li>Displays an interactive 3-D scatter plot with explained variance</li>
         </ul>
       </section>
     </main>
-    </>
   );
 }
 
-export default App;
+// ── App / Router ──────────────────────────────────────────────────────────────
+
+export default function App() {
+  return (
+    <BrowserRouter>
+      <Navbar />
+      <Routes>
+        <Route path="/" element={<Home />} />
+        <Route path="/login" element={<Login />} />
+        <Route path="/register" element={<Register />} />
+        <Route
+          path="/projects"
+          element={
+            <Protected>
+              <Projects />
+            </Protected>
+          }
+        />
+        <Route
+          path="/visualize/:runId"
+          element={
+            <Protected>
+              <Visualize />
+            </Protected>
+          }
+        />
+        {/* Catch-all */}
+        <Route path="*" element={<Navigate to="/" replace />} />
+      </Routes>
+    </BrowserRouter>
+  );
+}
