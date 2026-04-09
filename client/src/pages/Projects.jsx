@@ -20,6 +20,9 @@ function formatNumber(value) {
 export default function Projects() {
   const navigate = useNavigate();
   const fileRef = useRef(null);
+  const correlationRef = useRef(null);
+  const distributionRef = useRef(null);
+  const scatterRef = useRef(null);
 
   const [datasets, setDatasets] = useState([]);
   const [loadingDatasets, setLoadingDatasets] = useState(true);
@@ -53,9 +56,88 @@ export default function Projects() {
   const [runsByDataset, setRunsByDataset] = useState({});
   const [runsLoadingId, setRunsLoadingId] = useState(null);
 
+  // Dataset analysis state
+  const [openAnalysisId, setOpenAnalysisId] = useState(null);
+  const [analysisByDataset, setAnalysisByDataset] = useState({});
+  const [analysisLoadingId, setAnalysisLoadingId] = useState(null);
+  const [distributionColumn, setDistributionColumn] = useState("");
+  const [scatterX, setScatterX] = useState("");
+  const [scatterY, setScatterY] = useState("");
+
   useEffect(() => {
     fetchDatasets();
   }, []);
+
+  useEffect(() => {
+    const analysis = openAnalysisId ? analysisByDataset[openAnalysisId] : null;
+    if (!analysis || !correlationRef.current || !distributionRef.current || !scatterRef.current) return;
+
+    import("plotly.js-dist-min").then((Plotly) => {
+      const cols = analysis.columnNames ?? [];
+      const rows = analysis.rows ?? [];
+      const distributionIndex = Math.max(0, cols.indexOf(distributionColumn || cols[0]));
+      const xIndex = Math.max(0, cols.indexOf(scatterX || cols[0]));
+      const yIndex = Math.max(0, cols.indexOf(scatterY || cols[1] || cols[0]));
+      const distributionValues = rows.map((row) => row.values[distributionIndex]);
+      const xValues = rows.map((row) => row.values[xIndex]);
+      const yValues = rows.map((row) => row.values[yIndex]);
+
+      Plotly.default.newPlot(correlationRef.current, [{
+        type: "heatmap",
+        x: cols,
+        y: cols,
+        z: analysis.correlationMatrix,
+        zmin: -1,
+        zmax: 1,
+        colorscale: "RdBu",
+        reversescale: true,
+        hovertemplate: "%{y} vs %{x}: %{z:.3f}<extra></extra>",
+      }], {
+        margin: { l: 90, r: 20, t: 20, b: 80 },
+        paper_bgcolor: "rgba(0,0,0,0)",
+        plot_bgcolor: "rgba(255,255,255,0.6)",
+      }, { responsive: true, displaylogo: false });
+
+      Plotly.default.newPlot(distributionRef.current, [
+        {
+          type: "histogram",
+          x: distributionValues,
+          name: "Histogram",
+          marker: { color: "#2d4a3e" },
+          opacity: 0.85,
+        },
+        {
+          type: "box",
+          x: distributionValues,
+          name: "Box plot",
+          marker: { color: "#b57a2e" },
+          boxpoints: "outliers",
+          yaxis: "y2",
+        },
+      ], {
+        margin: { l: 50, r: 20, t: 20, b: 50 },
+        yaxis2: { overlaying: "y", side: "right", showticklabels: false },
+        paper_bgcolor: "rgba(0,0,0,0)",
+        plot_bgcolor: "rgba(255,255,255,0.6)",
+        showlegend: false,
+      }, { responsive: true, displaylogo: false });
+
+      Plotly.default.newPlot(scatterRef.current, [{
+        type: "scatter",
+        mode: "markers",
+        x: xValues,
+        y: yValues,
+        marker: { size: 8, opacity: 0.75, color: rows.map((_, i) => i), colorscale: "Viridis" },
+        hovertemplate: `${cols[xIndex]}: %{x:.3f}<br>${cols[yIndex]}: %{y:.3f}<extra></extra>`,
+      }], {
+        xaxis: { title: cols[xIndex] },
+        yaxis: { title: cols[yIndex] },
+        margin: { l: 60, r: 20, t: 20, b: 60 },
+        paper_bgcolor: "rgba(0,0,0,0)",
+        plot_bgcolor: "rgba(255,255,255,0.6)",
+      }, { responsive: true, displaylogo: false });
+    });
+  }, [openAnalysisId, analysisByDataset, distributionColumn, scatterX, scatterY]);
 
   async function fetchDatasets() {
     setLoadingDatasets(true);
@@ -249,6 +331,38 @@ export default function Projects() {
     } catch { alert("Could not reach the server."); }
   }
 
+  async function handleAnalysis(datasetId) {
+    if (openAnalysisId === datasetId) {
+      setOpenAnalysisId(null);
+      return;
+    }
+
+    setOpenAnalysisId(datasetId);
+    if (analysisByDataset[datasetId]) {
+      const cols = analysisByDataset[datasetId].columnNames ?? [];
+      setDistributionColumn(cols[0] || "");
+      setScatterX(cols[0] || "");
+      setScatterY(cols[1] || cols[0] || "");
+      return;
+    }
+
+    setAnalysisLoadingId(datasetId);
+    try {
+      const res = await fetch(`${apiBase}/api/datasets/${datasetId}/analysis`, {
+        headers: authHeaders(),
+      });
+      const data = await res.json();
+      if (res.ok) {
+        const cols = data.analysis?.columnNames ?? [];
+        setAnalysisByDataset((analyses) => ({ ...analyses, [datasetId]: data.analysis }));
+        setDistributionColumn(cols[0] || "");
+        setScatterX(cols[0] || "");
+        setScatterY(cols[1] || cols[0] || "");
+      }
+    } catch { alert("Could not reach the server."); }
+    finally { setAnalysisLoadingId(null); }
+  }
+
   // ── Feature 2: Delete ──
 
   async function handleDelete(datasetId, filename) {
@@ -334,8 +448,10 @@ export default function Projects() {
                   const reportState = qualityReports[ds.id];
                   const report = reportState?.report;
                   const runs = runsByDataset[ds.id] ?? [];
+                  const analysis = analysisByDataset[ds.id];
                   const isConfiguring = configuringId === ds.id;
                   const hasRunHistory = openRunsId === ds.id;
+                  const hasAnalysis = openAnalysisId === ds.id;
                   return (
                     <Fragment key={ds.id}>
                       <tr>
@@ -415,6 +531,13 @@ export default function Projects() {
                               onClick={() => handleQuality(ds.id)}
                             >
                               {reportState?.open ? "Hide quality" : qualityLoadingId === ds.id ? "Loading…" : "Quality"}
+                            </button>
+                            <button
+                              className="btn btn-small btn-ghost"
+                              disabled={analysisLoadingId === ds.id}
+                              onClick={() => handleAnalysis(ds.id)}
+                            >
+                              {hasAnalysis ? "Hide analysis" : analysisLoadingId === ds.id ? "Loading…" : "Analysis"}
                             </button>
                             <button className="btn btn-small btn-ghost" onClick={() => startEditing(ds)}>
                               Edit
@@ -597,6 +720,112 @@ export default function Projects() {
                                 <p className="muted">
                                   Ignored: {report.ignoredColumns.map((col) => col.name).join(", ")}
                                 </p>
+                              )}
+                            </div>
+                          </td>
+                        </tr>
+                      )}
+
+                      {hasAnalysis && (
+                        <tr className="detail-row">
+                          <td colSpan={6}>
+                            <div className="detail-panel analysis-panel">
+                              <div>
+                                <h3>Quantitative analysis</h3>
+                                <p className="muted">
+                                  Correlations, distributions, and pairwise scatter plots for the cleaned numeric rows.
+                                </p>
+                              </div>
+
+                              {analysisLoadingId === ds.id && <p className="muted">Loading analysis…</p>}
+
+                              {analysis && (
+                                <>
+                                  <div className="analysis-grid">
+                                    <div>
+                                      <h3>Correlation heatmap</h3>
+                                      <div ref={correlationRef} className="analysis-plot" />
+                                    </div>
+                                    <div>
+                                      <h3>Strongest relationships</h3>
+                                      <div className="correlation-list">
+                                        {(analysis.strongestCorrelations ?? []).map((item) => (
+                                          <p key={`${item.x}-${item.y}`}>
+                                            <strong>{item.x}</strong> and <strong>{item.y}</strong>: {Number(item.r).toFixed(3)}
+                                          </p>
+                                        ))}
+                                      </div>
+                                    </div>
+                                  </div>
+
+                                  <div className="analysis-controls">
+                                    <label className="field compact-field">
+                                      <span>Distribution</span>
+                                      <select
+                                        value={distributionColumn}
+                                        onChange={(e) => setDistributionColumn(e.target.value)}
+                                      >
+                                        {analysis.columnNames.map((col) => (
+                                          <option key={col} value={col}>{col}</option>
+                                        ))}
+                                      </select>
+                                    </label>
+                                    <label className="field compact-field">
+                                      <span>X axis</span>
+                                      <select value={scatterX} onChange={(e) => setScatterX(e.target.value)}>
+                                        {analysis.columnNames.map((col) => (
+                                          <option key={col} value={col}>{col}</option>
+                                        ))}
+                                      </select>
+                                    </label>
+                                    <label className="field compact-field">
+                                      <span>Y axis</span>
+                                      <select value={scatterY} onChange={(e) => setScatterY(e.target.value)}>
+                                        {analysis.columnNames.map((col) => (
+                                          <option key={col} value={col}>{col}</option>
+                                        ))}
+                                      </select>
+                                    </label>
+                                  </div>
+
+                                  <div className="analysis-grid">
+                                    <div>
+                                      <h3>Histogram and box plot</h3>
+                                      <div ref={distributionRef} className="analysis-plot" />
+                                    </div>
+                                    <div>
+                                      <h3>Scatterplot explorer</h3>
+                                      <div ref={scatterRef} className="analysis-plot" />
+                                    </div>
+                                  </div>
+
+                                  <div className="dataset-table-wrap">
+                                    <table className="dataset-table quality-table">
+                                      <thead>
+                                        <tr>
+                                          <th>Column</th>
+                                          <th>Mean</th>
+                                          <th>Median</th>
+                                          <th>Std dev</th>
+                                          <th>Q1</th>
+                                          <th>Q3</th>
+                                        </tr>
+                                      </thead>
+                                      <tbody>
+                                        {analysis.columnStats.map((col) => (
+                                          <tr key={col.name}>
+                                            <td>{col.name}</td>
+                                            <td>{formatNumber(col.mean)}</td>
+                                            <td>{formatNumber(col.median)}</td>
+                                            <td>{formatNumber(col.stdDev)}</td>
+                                            <td>{formatNumber(col.q1)}</td>
+                                            <td>{formatNumber(col.q3)}</td>
+                                          </tr>
+                                        ))}
+                                      </tbody>
+                                    </table>
+                                  </div>
+                                </>
                               )}
                             </div>
                           </td>

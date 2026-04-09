@@ -17,10 +17,12 @@
  * GET    /api/datasets/:id/preview   first 10 rows of dataset   [auth]
  * PATCH  /api/datasets/:id           rename / add notes         [auth]
  * GET    /api/datasets/:id/quality   dataset quality report     [auth]
+ * GET    /api/datasets/:id/analysis  numeric analysis data      [auth]
  * DELETE /api/datasets/:id           delete dataset + PCA runs  [auth]
  * POST   /api/datasets/:id/pca      run PCA on a dataset       [auth]
  * GET    /api/datasets/:id/pca      list PCA runs for dataset   [auth]
  * GET    /api/pca/:id               fetch a single PCA result   [auth]
+ * GET    /api/pca/:id/clusters      k-means clusters for run    [auth]
  * GET    /api/pca/:id/export        download transformed CSV    [auth]
  * DELETE /api/pca/:id               delete a PCA run            [auth]
  */
@@ -80,6 +82,7 @@ async function resolveUserId(req) {
 
 async function ensureSchema() {
   await pool.query('ALTER TABLE datasets ADD COLUMN IF NOT EXISTS quality_report JSONB');
+  await pool.query('ALTER TABLE pca_runs ADD COLUMN IF NOT EXISTS loadings JSONB');
 }
 
 function isNumericValue(value) {
@@ -159,6 +162,158 @@ function buildQualityReport(records, allColumns, quantitativeColumns, cleanRows)
       numericLikeCount: records.filter((row) => isNumericValue(row[col])).length,
     })),
     warnings,
+  };
+}
+
+function quantile(sortedValues, q) {
+  if (!sortedValues.length) return null;
+  const pos = (sortedValues.length - 1) * q;
+  const base = Math.floor(pos);
+  const rest = pos - base;
+  const next = sortedValues[base + 1];
+  return next === undefined ? sortedValues[base] : sortedValues[base] + rest * (next - sortedValues[base]);
+}
+
+function summarizeMatrixColumn(matrix, colIndex, name) {
+  const values = matrix.map((row) => Number(row[colIndex])).filter((value) => Number.isFinite(value));
+  const sorted = [...values].sort((a, b) => a - b);
+  const sum = values.reduce((total, value) => total + value, 0);
+  const mean = values.length ? sum / values.length : 0;
+  const variance = values.length
+    ? values.reduce((total, value) => total + (value - mean) ** 2, 0) / values.length
+    : 0;
+  const stdDev = Math.sqrt(variance);
+  const iqr = quantile(sorted, 0.75) - quantile(sorted, 0.25);
+
+  return {
+    name,
+    count: values.length,
+    min: sorted[0] ?? null,
+    q1: quantile(sorted, 0.25),
+    median: quantile(sorted, 0.5),
+    q3: quantile(sorted, 0.75),
+    max: sorted[sorted.length - 1] ?? null,
+    mean,
+    stdDev,
+    iqr,
+    values,
+  };
+}
+
+function pearson(xValues, yValues) {
+  const n = Math.min(xValues.length, yValues.length);
+  if (n < 2) return null;
+  const meanX = xValues.reduce((sum, value) => sum + value, 0) / n;
+  const meanY = yValues.reduce((sum, value) => sum + value, 0) / n;
+  let numerator = 0;
+  let xDenom = 0;
+  let yDenom = 0;
+  for (let i = 0; i < n; i += 1) {
+    const dx = xValues[i] - meanX;
+    const dy = yValues[i] - meanY;
+    numerator += dx * dy;
+    xDenom += dx * dx;
+    yDenom += dy * dy;
+  }
+  const denom = Math.sqrt(xDenom * yDenom);
+  return denom === 0 ? null : numerator / denom;
+}
+
+function buildDatasetAnalysis(ds) {
+  const matrix = ds.raw_data ?? [];
+  const columnNames = ds.quantitative_columns ?? [];
+  const statsWithValues = columnNames.map((name, i) => summarizeMatrixColumn(matrix, i, name));
+  const columnStats = statsWithValues.map(({ values: _values, ...summary }) => summary);
+  const correlationMatrix = statsWithValues.map((xCol) =>
+    statsWithValues.map((yCol) => pearson(xCol.values, yCol.values))
+  );
+  const correlations = [];
+
+  for (let i = 0; i < columnNames.length; i += 1) {
+    for (let j = i + 1; j < columnNames.length; j += 1) {
+      correlations.push({
+        x: columnNames[i],
+        y: columnNames[j],
+        r: correlationMatrix[i][j],
+      });
+    }
+  }
+
+  const strongestCorrelations = correlations
+    .filter((item) => item.r !== null)
+    .sort((a, b) => Math.abs(b.r) - Math.abs(a.r))
+    .slice(0, 8);
+  const maxRows = 5000;
+  const step = matrix.length > maxRows ? Math.ceil(matrix.length / maxRows) : 1;
+  const rows = matrix
+    .filter((_, index) => index % step === 0)
+    .slice(0, maxRows)
+    .map((row, index) => ({ rowNumber: index * step + 1, values: row }));
+
+  return {
+    columnNames,
+    columnStats,
+    correlationMatrix,
+    strongestCorrelations,
+    rows,
+    rowCount: matrix.length,
+    sampledRowCount: rows.length,
+  };
+}
+
+function squaredDistance(a, b) {
+  return a.reduce((sum, value, index) => sum + (value - b[index]) ** 2, 0);
+}
+
+function runKMeans(points, requestedK) {
+  if (!Array.isArray(points) || points.length < 2) {
+    throw new Error('Need at least 2 points for clustering.');
+  }
+  const k = Math.min(Math.max(Number(requestedK) || 3, 2), 6, points.length);
+  const dims = points[0].length;
+  const centroids = Array.from({ length: k }, (_, i) => {
+    const index = Math.floor((i * (points.length - 1)) / Math.max(1, k - 1));
+    return [...points[index]];
+  });
+  let labels = new Array(points.length).fill(0);
+
+  for (let iteration = 0; iteration < 50; iteration += 1) {
+    let changed = false;
+    labels = points.map((point, pointIndex) => {
+      let bestLabel = 0;
+      let bestDistance = Infinity;
+      for (let i = 0; i < centroids.length; i += 1) {
+        const distance = squaredDistance(point, centroids[i]);
+        if (distance < bestDistance) {
+          bestDistance = distance;
+          bestLabel = i;
+        }
+      }
+      if (labels[pointIndex] !== bestLabel) changed = true;
+      return bestLabel;
+    });
+
+    const totals = Array.from({ length: k }, () => Array(dims).fill(0));
+    const counts = Array(k).fill(0);
+    points.forEach((point, index) => {
+      const label = labels[index];
+      counts[label] += 1;
+      for (let dim = 0; dim < dims; dim += 1) totals[label][dim] += point[dim];
+    });
+
+    for (let i = 0; i < k; i += 1) {
+      if (counts[i] === 0) continue;
+      centroids[i] = totals[i].map((total) => total / counts[i]);
+    }
+
+    if (!changed) break;
+  }
+
+  return {
+    k,
+    labels,
+    centroids,
+    counts: centroids.map((_, i) => labels.filter((label) => label === i).length),
   };
 }
 
@@ -447,6 +602,33 @@ app.get('/api/datasets/:id/quality', requireAuth, async (req, res) => {
   }
 });
 
+app.get('/api/datasets/:id/analysis', requireAuth, async (req, res) => {
+  const datasetId = parseInt(req.params.id, 10);
+  if (isNaN(datasetId)) {
+    return res.status(400).json({ status: 'error', message: 'Invalid dataset id' });
+  }
+
+  try {
+    const uid = await resolveUserId(req);
+    const result = await pool.query(
+      `SELECT raw_data, quantitative_columns, row_count
+       FROM datasets WHERE id = $1 AND user_id = $2`,
+      [datasetId, uid]
+    );
+    if (!result.rows.length) {
+      return res.status(404).json({ status: 'error', message: 'Dataset not found' });
+    }
+
+    return res.json({
+      status: 'success',
+      analysis: buildDatasetAnalysis(result.rows[0]),
+    });
+  } catch (err) {
+    console.error('Dataset analysis error:', err);
+    return res.status(500).json({ status: 'error', message: 'Server error' });
+  }
+});
+
 // ── FEATURE 2: Delete Dataset ────────────────────────────────────────────────
 
 app.delete('/api/datasets/:id', requireAuth, async (req, res) => {
@@ -612,14 +794,15 @@ app.post('/api/datasets/:id/pca', requireAuth, async (req, res) => {
     const runResult = await pool.query(
       `INSERT INTO pca_runs
          (dataset_id, n_components, explained_variance_ratio,
-          all_explained_variance, transformed_data, column_names, n_samples)
-       VALUES ($1, $2, $3, $4, $5, $6, $7)
+          all_explained_variance, loadings, transformed_data, column_names, n_samples)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
        RETURNING id`,
       [
         datasetId,
         pcaResult.nComponents,
         JSON.stringify(pcaResult.explainedVarianceRatio),
         JSON.stringify(pcaResult.allExplainedVariance),
+        JSON.stringify(pcaResult.loadings),
         JSON.stringify(pcaResult.transformed),
         selectedColumns,
         pcaResult.nSamples,
@@ -632,6 +815,7 @@ app.post('/api/datasets/:id/pca', requireAuth, async (req, res) => {
       nComponents: pcaResult.nComponents,
       explainedVarianceRatio: pcaResult.explainedVarianceRatio,
       allExplainedVariance: pcaResult.allExplainedVariance,
+      loadings: pcaResult.loadings,
       totalExplained: pcaResult.totalExplained,
       nSamples: pcaResult.nSamples,
       columnNames: selectedColumns,
@@ -693,6 +877,7 @@ app.get('/api/pca/:id', requireAuth, async (req, res) => {
       nComponents: run.n_components,
       explainedVarianceRatio: run.explained_variance_ratio,
       allExplainedVariance: run.all_explained_variance,
+      loadings: run.loadings ?? [],
       transformedData: run.transformed_data,
       columnNames: run.column_names,
       nSamples: run.n_samples,
@@ -700,6 +885,33 @@ app.get('/api/pca/:id', requireAuth, async (req, res) => {
     });
   } catch (err) {
     console.error('Get PCA run error:', err);
+    return res.status(500).json({ status: 'error', message: 'Server error' });
+  }
+});
+
+app.get('/api/pca/:id/clusters', requireAuth, async (req, res) => {
+  const runId = parseInt(req.params.id, 10);
+  if (isNaN(runId)) {
+    return res.status(400).json({ status: 'error', message: 'Invalid run id' });
+  }
+
+  try {
+    const uid = await resolveUserId(req);
+    const result = await pool.query(
+      `SELECT r.transformed_data
+       FROM pca_runs r
+       JOIN datasets d ON d.id = r.dataset_id
+       WHERE r.id = $1 AND d.user_id = $2`,
+      [runId, uid]
+    );
+    if (!result.rows.length) {
+      return res.status(404).json({ status: 'error', message: 'PCA run not found' });
+    }
+
+    const clusters = runKMeans(result.rows[0].transformed_data, req.query.k);
+    return res.json({ status: 'success', clusters });
+  } catch (err) {
+    console.error('Cluster PCA run error:', err);
     return res.status(500).json({ status: 'error', message: 'Server error' });
   }
 });

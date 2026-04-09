@@ -40,6 +40,7 @@ CREATE TABLE pca_runs (
     n_components             INTEGER      NOT NULL,
     explained_variance_ratio JSONB,
     all_explained_variance   JSONB,
+    loadings                 JSONB,
     transformed_data         JSONB,
     column_names             TEXT[],
     n_samples                INTEGER,

@@ -17,6 +17,7 @@ import { PCA } from 'ml-pca';
  *   transformed: number[][],
  *   explainedVarianceRatio: number[],
  *   allExplainedVariance: number[],
+ *   loadings: number[][],
  *   totalExplained: number,
  *   nComponents: number,
  *   nSamples: number
@@ -45,12 +46,14 @@ export function runPCA(matrix, nComponents, options = {}) {
   // getExplainedVariance() returns fractions (each component / total variance).
   const allEV = pca.getExplainedVariance();
   const explainedVarianceRatio = allEV.slice(0, k);
+  const loadings = pca.getLoadings().to2DArray().slice(0, k);
   const totalExplained = explainedVarianceRatio.reduce((s, v) => s + v, 0);
 
   return {
     transformed,
     explainedVarianceRatio,
     allExplainedVariance: allEV,
+    loadings,
     totalExplained,
     nComponents: k,
     nSamples: matrix.length,

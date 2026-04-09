@@ -17,10 +17,15 @@ export default function Visualize() {
   const navigate = useNavigate();
   const plotRef = useRef(null);
   const screeRef = useRef(null);
+  const loadingsRef = useRef(null);
 
   const [run, setRun] = useState(null);
   const [error, setError] = useState("");
   const [plotReady, setPlotReady] = useState(false);
+  const [clusterK, setClusterK] = useState(3);
+  const [clusterData, setClusterData] = useState(null);
+  const [clusterLoading, setClusterLoading] = useState(false);
+  const [loadingsComponent, setLoadingsComponent] = useState(0);
 
   useEffect(() => {
     async function load() {
@@ -46,6 +51,9 @@ export default function Visualize() {
       const is3D = run.nComponents >= 3;
 
       // ── Main scatter plot ──
+      const markerColor = clusterData?.labels ?? points.map((_, i) => i);
+      const markerScale = clusterData ? "Portland" : "Viridis";
+      const clusterHover = clusterData ? "<br>Cluster: %{marker.color}" : "";
       const trace = is3D
         ? {
             type: "scatter3d",
@@ -53,16 +61,16 @@ export default function Visualize() {
             x: points.map((p) => p[0]),
             y: points.map((p) => p[1]),
             z: points.map((p) => p[2]),
-            marker: { size: 5, opacity: 0.8, color: points.map((_, i) => i), colorscale: "Viridis" },
-            hovertemplate: `PC1: %{x:.3f}<br>PC2: %{y:.3f}<br>PC3: %{z:.3f}<extra></extra>`,
+            marker: { size: 5, opacity: 0.8, color: markerColor, colorscale: markerScale },
+            hovertemplate: `PC1: %{x:.3f}<br>PC2: %{y:.3f}<br>PC3: %{z:.3f}${clusterHover}<extra></extra>`,
           }
         : {
             type: "scatter",
             mode: "markers",
             x: points.map((p) => p[0]),
             y: points.map((p) => p[1]),
-            marker: { size: 8, opacity: 0.8, color: points.map((_, i) => i), colorscale: "Viridis" },
-            hovertemplate: `PC1: %{x:.3f}<br>PC2: %{y:.3f}<extra></extra>`,
+            marker: { size: 8, opacity: 0.8, color: markerColor, colorscale: markerScale },
+            hovertemplate: `PC1: %{x:.3f}<br>PC2: %{y:.3f}${clusterHover}<extra></extra>`,
           };
 
       const evRatios = run.explainedVarianceRatio;
@@ -130,9 +138,52 @@ export default function Visualize() {
         }, { responsive: true, displaylogo: false, displayModeBar: false });
       }
 
+      if (loadingsRef.current && run.loadings?.length) {
+        const selected = Math.min(loadingsComponent, run.loadings.length - 1);
+        const values = run.loadings[selected] ?? [];
+        Plotly.default.newPlot(loadingsRef.current, [{
+          type: "bar",
+          x: run.columnNames,
+          y: values,
+          marker: {
+            color: values.map((value) => value >= 0 ? "#2d4a3e" : "#b57a2e"),
+          },
+          hovertemplate: "%{x}: %{y:.3f}<extra></extra>",
+        }], {
+          yaxis: { title: "Loading" },
+          margin: { l: 55, r: 20, t: 25, b: 80 },
+          paper_bgcolor: "rgba(0,0,0,0)",
+          plot_bgcolor: "rgba(255,255,255,0.6)",
+        }, { responsive: true, displaylogo: false, displayModeBar: false });
+      }
+
       setPlotReady(true);
     });
-  }, [run]);
+  }, [run, clusterData, loadingsComponent]);
+
+  async function handleRunClusters() {
+    setClusterLoading(true);
+    try {
+      const res = await fetch(`${apiBase}/api/pca/${runId}/clusters?k=${clusterK}`, {
+        headers: authHeaders(),
+      });
+      const data = await res.json();
+      if (res.ok) setClusterData(data.clusters);
+      else alert(data.message || "Could not cluster this PCA run.");
+    } catch {
+      alert("Could not reach the server.");
+    } finally {
+      setClusterLoading(false);
+    }
+  }
+
+  function topContributors(componentIndex) {
+    const loadings = run.loadings?.[componentIndex] ?? [];
+    return loadings
+      .map((value, index) => ({ name: run.columnNames[index], value }))
+      .sort((a, b) => Math.abs(b.value) - Math.abs(a.value))
+      .slice(0, 5);
+  }
 
   // ── Feature 4: Export CSV ──
   async function handleExportCSV() {
@@ -245,6 +296,41 @@ export default function Visualize() {
         {!plotReady && <p className="muted">Rendering plot…</p>}
       </section>
 
+      <section className="card viz-plot-card">
+        <h3>K-means clusters</h3>
+        <p className="muted">
+          Group points using their PCA coordinates, then recolor the scatter plot by cluster.
+        </p>
+        <div className="analysis-controls">
+          <label className="field compact-field">
+            <span>Clusters</span>
+            <select value={clusterK} onChange={(e) => setClusterK(Number(e.target.value))}>
+              {[2, 3, 4, 5, 6].map((k) => (
+                <option key={k} value={k}>{k}</option>
+              ))}
+            </select>
+          </label>
+          <button className="btn btn-small btn-primary" disabled={clusterLoading} onClick={handleRunClusters}>
+            {clusterLoading ? "Clustering…" : "Run clustering"}
+          </button>
+          {clusterData && (
+            <button className="btn btn-small btn-ghost" onClick={() => setClusterData(null)}>
+              Clear clusters
+            </button>
+          )}
+        </div>
+        {clusterData && (
+          <div className="cluster-summary">
+            {clusterData.counts.map((count, index) => (
+              <div key={index}>
+                <span className="meta-label">Cluster {index}</span>
+                <strong>{count} points</strong>
+              </div>
+            ))}
+          </div>
+        )}
+      </section>
+
       {/* Feature 3: Scree plot */}
       <section className="card viz-plot-card">
         <h3>Scree plot</h3>
@@ -254,6 +340,41 @@ export default function Visualize() {
         </p>
         <div ref={screeRef} className="plotly-container scree-container" />
       </section>
+
+      {run.loadings?.length > 0 && (
+        <section className="card viz-plot-card">
+          <h3>PCA component loadings</h3>
+          <p className="muted">
+            Higher absolute values mean the original feature contributes more to that principal component.
+          </p>
+          <div className="analysis-controls">
+            <label className="field compact-field">
+              <span>Component</span>
+              <select
+                value={loadingsComponent}
+                onChange={(e) => setLoadingsComponent(Number(e.target.value))}
+              >
+                {run.loadings.map((_, index) => (
+                  <option key={index} value={index}>PC{index + 1}</option>
+                ))}
+              </select>
+            </label>
+          </div>
+          <div ref={loadingsRef} className="plotly-container scree-container" />
+          <div className="loadings-grid">
+            {run.loadings.map((_, componentIndex) => (
+              <div key={componentIndex} className="loading-card">
+                <h3>PC{componentIndex + 1} top contributors</h3>
+                {topContributors(componentIndex).map((item) => (
+                  <p key={item.name}>
+                    <strong>{item.name}</strong>: {item.value.toFixed(3)}
+                  </p>
+                ))}
+              </div>
+            ))}
+          </div>
+        </section>
+      )}
     </main>
   );
 }
