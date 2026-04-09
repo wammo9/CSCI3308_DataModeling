@@ -15,6 +15,7 @@ CREATE TABLE users (
 -- Stores metadata and the parsed numeric matrix for each uploaded CSV.
 -- raw_data is a JSON array of arrays (rows x quant columns).
 -- preview_data stores the first 10 rows with ALL original columns for preview.
+-- quality_report stores upload-time profile data for the dataset.
 CREATE TABLE datasets (
     id                    SERIAL PRIMARY KEY,
     user_id               INTEGER      REFERENCES users(id) ON DELETE CASCADE,
@@ -27,6 +28,7 @@ CREATE TABLE datasets (
     all_columns           TEXT[],
     raw_data              JSONB,
     preview_data          JSONB,
+    quality_report        JSONB,
     upload_timestamp      TIMESTAMPTZ  DEFAULT NOW()
 );
 

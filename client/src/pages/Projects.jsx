@@ -1,11 +1,20 @@
-import { useState, useEffect, useRef } from "react";
-import { useNavigate } from "react-router-dom";
+import { Fragment, useState, useEffect, useRef } from "react";
+import { Link, useNavigate } from "react-router-dom";
 import { getToken } from "../App";
 
 const apiBase = import.meta.env.VITE_API_URL || "";
 
 function authHeaders() {
   return { Authorization: `Bearer ${getToken()}` };
+}
+
+function pct(ratios = []) {
+  return (ratios.reduce((sum, value) => sum + Number(value || 0), 0) * 100).toFixed(1) + "%";
+}
+
+function formatNumber(value) {
+  if (value === null || value === undefined || Number.isNaN(Number(value))) return "n/a";
+  return Number(value).toLocaleString(undefined, { maximumFractionDigits: 3 });
 }
 
 export default function Projects() {
@@ -27,6 +36,22 @@ export default function Projects() {
   const [editingId, setEditingId] = useState(null);
   const [editName, setEditName] = useState("");
   const [editNotes, setEditNotes] = useState("");
+
+  // Quality report state
+  const [qualityReports, setQualityReports] = useState({});
+  const [qualityLoadingId, setQualityLoadingId] = useState(null);
+
+  // PCA options state
+  const [configuringId, setConfiguringId] = useState(null);
+  const [selectedColumns, setSelectedColumns] = useState([]);
+  const [componentCount, setComponentCount] = useState(3);
+  const [scaleFeatures, setScaleFeatures] = useState(true);
+  const [configError, setConfigError] = useState("");
+
+  // Run history state
+  const [openRunsId, setOpenRunsId] = useState(null);
+  const [runsByDataset, setRunsByDataset] = useState({});
+  const [runsLoadingId, setRunsLoadingId] = useState(null);
 
   useEffect(() => {
     fetchDatasets();
@@ -95,6 +120,56 @@ export default function Projects() {
     finally { setRunningPCA(null); }
   }
 
+  function startConfiguring(ds) {
+    if (configuringId === ds.id) {
+      setConfiguringId(null);
+      return;
+    }
+    const columns = ds.quantitative_columns ?? [];
+    setConfiguringId(ds.id);
+    setSelectedColumns(columns);
+    setComponentCount(columns.length >= 3 ? 3 : 2);
+    setScaleFeatures(true);
+    setConfigError("");
+  }
+
+  function toggleSelectedColumn(column) {
+    setSelectedColumns((cols) =>
+      cols.includes(column) ? cols.filter((c) => c !== column) : [...cols, column]
+    );
+  }
+
+  async function handleConfiguredPCA(datasetId) {
+    setConfigError("");
+    if (selectedColumns.length < 2) {
+      setConfigError("Choose at least two numeric features.");
+      return;
+    }
+
+    setRunningPCA(datasetId);
+    try {
+      const res = await fetch(`${apiBase}/api/datasets/${datasetId}/pca`, {
+        method: "POST",
+        headers: { ...authHeaders(), "Content-Type": "application/json" },
+        body: JSON.stringify({
+          columns: selectedColumns,
+          nComponents: componentCount,
+          scale: scaleFeatures,
+        }),
+      });
+      const data = await res.json();
+      if (!res.ok) {
+        setConfigError(data.message || "PCA failed");
+      } else {
+        navigate(`/visualize/${data.runId}`);
+      }
+    } catch {
+      setConfigError("Could not reach the server.");
+    } finally {
+      setRunningPCA(null);
+    }
+  }
+
   // ── Feature 1: Preview ──
 
   async function handlePreview(datasetId) {
@@ -110,6 +185,68 @@ export default function Projects() {
       }
     } catch { /* ignore */ }
     finally { setPreviewLoading(false); }
+  }
+
+  async function handleQuality(datasetId) {
+    if (qualityReports[datasetId]?.open) {
+      setQualityReports((reports) => ({
+        ...reports,
+        [datasetId]: { ...reports[datasetId], open: false },
+      }));
+      return;
+    }
+
+    setQualityLoadingId(datasetId);
+    try {
+      const res = await fetch(`${apiBase}/api/datasets/${datasetId}/quality`, {
+        headers: authHeaders(),
+      });
+      const data = await res.json();
+      if (res.ok) {
+        setQualityReports((reports) => ({
+          ...reports,
+          [datasetId]: { open: true, report: data.qualityReport },
+        }));
+      }
+    } catch { /* ignore */ }
+    finally { setQualityLoadingId(null); }
+  }
+
+  async function fetchRuns(datasetId) {
+    setRunsLoadingId(datasetId);
+    try {
+      const res = await fetch(`${apiBase}/api/datasets/${datasetId}/pca`, {
+        headers: authHeaders(),
+      });
+      const data = await res.json();
+      if (res.ok) {
+        setRunsByDataset((runs) => ({ ...runs, [datasetId]: data.runs ?? [] }));
+      }
+    } catch { /* ignore */ }
+    finally { setRunsLoadingId(null); }
+  }
+
+  async function handleRuns(datasetId) {
+    if (openRunsId === datasetId) {
+      setOpenRunsId(null);
+      return;
+    }
+
+    setOpenRunsId(datasetId);
+    fetchRuns(datasetId);
+  }
+
+  async function handleDeleteRun(runId, datasetId) {
+    if (!confirm("Delete this PCA run?")) return;
+    try {
+      const res = await fetch(`${apiBase}/api/pca/${runId}`, {
+        method: "DELETE",
+        headers: authHeaders(),
+      });
+      if (res.ok) {
+        fetchRuns(datasetId);
+      }
+    } catch { alert("Could not reach the server."); }
   }
 
   // ── Feature 2: Delete ──
@@ -193,78 +330,281 @@ export default function Projects() {
                 </tr>
               </thead>
               <tbody>
-                {datasets.map((ds) => (
-                  <tr key={ds.id}>
-                    {/* Name cell — inline editing */}
-                    <td>
-                      {editingId === ds.id ? (
-                        <div className="edit-inline">
-                          <input
-                            type="text"
-                            value={editName}
-                            onChange={(e) => setEditName(e.target.value)}
-                            className="edit-input"
-                            placeholder="Name"
-                          />
-                          <textarea
-                            value={editNotes}
-                            onChange={(e) => setEditNotes(e.target.value)}
-                            className="edit-textarea"
-                            placeholder="Notes (optional)"
-                            rows={2}
-                          />
-                          <div className="edit-actions">
-                            <button className="btn btn-small btn-primary" onClick={saveEditing}>Save</button>
-                            <button className="btn btn-small btn-ghost" onClick={() => setEditingId(null)}>Cancel</button>
-                          </div>
-                        </div>
-                      ) : (
-                        <div>
-                          <span className="filename">
-                            {ds.name || ds.original_filename.replace(/\.csv$/i, "")}
+                {datasets.map((ds) => {
+                  const reportState = qualityReports[ds.id];
+                  const report = reportState?.report;
+                  const runs = runsByDataset[ds.id] ?? [];
+                  const isConfiguring = configuringId === ds.id;
+                  const hasRunHistory = openRunsId === ds.id;
+                  return (
+                    <Fragment key={ds.id}>
+                      <tr>
+                        {/* Name cell — inline editing */}
+                        <td>
+                          {editingId === ds.id ? (
+                            <div className="edit-inline">
+                              <input
+                                type="text"
+                                value={editName}
+                                onChange={(e) => setEditName(e.target.value)}
+                                className="edit-input"
+                                placeholder="Name"
+                              />
+                              <textarea
+                                value={editNotes}
+                                onChange={(e) => setEditNotes(e.target.value)}
+                                className="edit-textarea"
+                                placeholder="Notes (optional)"
+                                rows={2}
+                              />
+                              <div className="edit-actions">
+                                <button className="btn btn-small btn-primary" onClick={saveEditing}>Save</button>
+                                <button className="btn btn-small btn-ghost" onClick={() => setEditingId(null)}>Cancel</button>
+                              </div>
+                            </div>
+                          ) : (
+                            <div>
+                              <span className="filename">
+                                {ds.name || ds.original_filename.replace(/\.csv$/i, "")}
+                              </span>
+                              {ds.notes && <p className="ds-notes">{ds.notes}</p>}
+                            </div>
+                          )}
+                        </td>
+                        <td className="muted">{ds.original_filename}</td>
+                        <td>{ds.row_count}</td>
+                        <td>
+                          <span className="tag-list">
+                            {(ds.quantitative_columns ?? []).map((col) => (
+                              <span key={col} className="tag">{col}</span>
+                            ))}
                           </span>
-                          {ds.notes && <p className="ds-notes">{ds.notes}</p>}
-                        </div>
+                        </td>
+                        <td className="muted">{new Date(ds.upload_timestamp).toLocaleDateString()}</td>
+                        <td>
+                          <div className="action-btns">
+                            <button
+                              className="btn btn-small btn-primary"
+                              disabled={runningPCA === ds.id}
+                              onClick={() => handleRunPCA(ds.id)}
+                            >
+                              {runningPCA === ds.id ? "Running…" : "PCA"}
+                            </button>
+                            <button
+                              className="btn btn-small btn-ghost"
+                              onClick={() => startConfiguring(ds)}
+                            >
+                              {isConfiguring ? "Hide options" : "Options"}
+                            </button>
+                            <button
+                              className="btn btn-small btn-ghost"
+                              onClick={() => handleRuns(ds.id)}
+                            >
+                              {hasRunHistory ? "Hide runs" : "Runs"}
+                            </button>
+                            <button
+                              className="btn btn-small btn-ghost"
+                              disabled={previewLoading && preview?.datasetId !== ds.id}
+                              onClick={() => handlePreview(ds.id)}
+                            >
+                              {preview?.datasetId === ds.id ? "Hide" : "Preview"}
+                            </button>
+                            <button
+                              className="btn btn-small btn-ghost"
+                              disabled={qualityLoadingId === ds.id}
+                              onClick={() => handleQuality(ds.id)}
+                            >
+                              {reportState?.open ? "Hide quality" : qualityLoadingId === ds.id ? "Loading…" : "Quality"}
+                            </button>
+                            <button className="btn btn-small btn-ghost" onClick={() => startEditing(ds)}>
+                              Edit
+                            </button>
+                            <button
+                              className="btn btn-small btn-danger"
+                              onClick={() => handleDelete(ds.id, ds.original_filename)}
+                            >
+                              Delete
+                            </button>
+                          </div>
+                        </td>
+                      </tr>
+
+                      {isConfiguring && (
+                        <tr className="detail-row">
+                          <td colSpan={6}>
+                            <div className="detail-panel pca-options-panel">
+                              <div>
+                                <h3>PCA options</h3>
+                                <p className="muted">Choose the numeric features for the next PCA run.</p>
+                              </div>
+
+                              {configError && <div className="alert alert-error">{configError}</div>}
+
+                              <div className="column-picker">
+                                {(ds.quantitative_columns ?? []).map((col) => (
+                                  <label key={col} className="check-pill">
+                                    <input
+                                      type="checkbox"
+                                      checked={selectedColumns.includes(col)}
+                                      onChange={() => toggleSelectedColumn(col)}
+                                    />
+                                    <span>{col}</span>
+                                  </label>
+                                ))}
+                              </div>
+
+                              <div className="option-grid">
+                                <label className="field compact-field">
+                                  <span>Components</span>
+                                  <select
+                                    value={componentCount}
+                                    onChange={(e) => setComponentCount(Number(e.target.value))}
+                                  >
+                                    <option value={2}>2D</option>
+                                    <option value={3}>3D</option>
+                                  </select>
+                                </label>
+
+                                <label className="check-row">
+                                  <input
+                                    type="checkbox"
+                                    checked={scaleFeatures}
+                                    onChange={(e) => setScaleFeatures(e.target.checked)}
+                                  />
+                                  <span>Scale features before PCA</span>
+                                </label>
+                              </div>
+
+                              <button
+                                className="btn btn-small btn-primary"
+                                disabled={runningPCA === ds.id}
+                                onClick={() => handleConfiguredPCA(ds.id)}
+                              >
+                                {runningPCA === ds.id ? "Running…" : "Run configured PCA"}
+                              </button>
+                            </div>
+                          </td>
+                        </tr>
                       )}
-                    </td>
-                    <td className="muted">{ds.original_filename}</td>
-                    <td>{ds.row_count}</td>
-                    <td>
-                      <span className="tag-list">
-                        {(ds.quantitative_columns ?? []).map((col) => (
-                          <span key={col} className="tag">{col}</span>
-                        ))}
-                      </span>
-                    </td>
-                    <td className="muted">{new Date(ds.upload_timestamp).toLocaleDateString()}</td>
-                    <td>
-                      <div className="action-btns">
-                        <button
-                          className="btn btn-small btn-primary"
-                          disabled={runningPCA === ds.id}
-                          onClick={() => handleRunPCA(ds.id)}
-                        >
-                          {runningPCA === ds.id ? "Running…" : "PCA"}
-                        </button>
-                        <button
-                          className="btn btn-small btn-ghost"
-                          onClick={() => handlePreview(ds.id)}
-                        >
-                          {preview?.datasetId === ds.id ? "Hide" : "Preview"}
-                        </button>
-                        <button className="btn btn-small btn-ghost" onClick={() => startEditing(ds)}>
-                          Edit
-                        </button>
-                        <button
-                          className="btn btn-small btn-danger"
-                          onClick={() => handleDelete(ds.id, ds.original_filename)}
-                        >
-                          Delete
-                        </button>
-                      </div>
-                    </td>
-                  </tr>
-                ))}
+
+                      {hasRunHistory && (
+                        <tr className="detail-row">
+                          <td colSpan={6}>
+                            <div className="detail-panel">
+                              <h3>PCA runs</h3>
+                              {runsLoadingId === ds.id ? (
+                                <p className="muted">Loading runs…</p>
+                              ) : runs.length === 0 ? (
+                                <p className="muted">No PCA runs yet.</p>
+                              ) : (
+                                <div className="run-list">
+                                  {runs.map((run) => (
+                                    <div key={run.id} className="run-item">
+                                      <div>
+                                        <strong>{run.n_components} components</strong>
+                                        <p className="muted">
+                                          {pct(run.explained_variance_ratio)} variance, {run.n_samples} samples,
+                                          {" "}{new Date(run.created_at).toLocaleString()}
+                                        </p>
+                                        <div className="tag-list">
+                                          {(run.column_names ?? []).map((col) => (
+                                            <span key={col} className="tag">{col}</span>
+                                          ))}
+                                        </div>
+                                      </div>
+                                      <div className="action-btns">
+                                        <Link className="btn btn-small btn-primary" to={`/visualize/${run.id}`}>
+                                          Open
+                                        </Link>
+                                        <button
+                                          className="btn btn-small btn-danger"
+                                          onClick={() => handleDeleteRun(run.id, ds.id)}
+                                        >
+                                          Delete
+                                        </button>
+                                      </div>
+                                    </div>
+                                  ))}
+                                </div>
+                              )}
+                            </div>
+                          </td>
+                        </tr>
+                      )}
+
+                      {reportState?.open && report && (
+                        <tr className="detail-row">
+                          <td colSpan={6}>
+                            <div className="detail-panel">
+                              <h3>Dataset quality</h3>
+                              <div className="quality-metrics">
+                                <div>
+                                  <span className="meta-label">Rows used</span>
+                                  <strong>{formatNumber(report.rows?.usableForPca)} of {formatNumber(report.rows?.total)}</strong>
+                                </div>
+                                <div>
+                                  <span className="meta-label">Rows dropped</span>
+                                  <strong>{formatNumber(report.rows?.droppedForPca)}</strong>
+                                </div>
+                                <div>
+                                  <span className="meta-label">Numeric features</span>
+                                  <strong>{formatNumber(report.columns?.quantitative)}</strong>
+                                </div>
+                                <div>
+                                  <span className="meta-label">Ignored columns</span>
+                                  <strong>{formatNumber(report.columns?.ignored)}</strong>
+                                </div>
+                              </div>
+
+                              {(report.warnings ?? []).length > 0 && (
+                                <div className="quality-warnings">
+                                  {report.warnings.map((warning) => (
+                                    <p key={warning}>{warning}</p>
+                                  ))}
+                                </div>
+                              )}
+
+                              {(report.numericColumns ?? []).length > 0 && (
+                                <div className="dataset-table-wrap">
+                                  <table className="dataset-table quality-table">
+                                    <thead>
+                                      <tr>
+                                        <th>Column</th>
+                                        <th>Missing</th>
+                                        <th>Min</th>
+                                        <th>Max</th>
+                                        <th>Mean</th>
+                                        <th>Std dev</th>
+                                      </tr>
+                                    </thead>
+                                    <tbody>
+                                      {report.numericColumns.map((col) => (
+                                        <tr key={col.name}>
+                                          <td>{col.name}</td>
+                                          <td>{formatNumber(col.missingCount)}</td>
+                                          <td>{formatNumber(col.min)}</td>
+                                          <td>{formatNumber(col.max)}</td>
+                                          <td>{formatNumber(col.mean)}</td>
+                                          <td>{formatNumber(col.stdDev)}</td>
+                                        </tr>
+                                      ))}
+                                    </tbody>
+                                  </table>
+                                </div>
+                              )}
+
+                              {(report.ignoredColumns ?? []).length > 0 && (
+                                <p className="muted">
+                                  Ignored: {report.ignoredColumns.map((col) => col.name).join(", ")}
+                                </p>
+                              )}
+                            </div>
+                          </td>
+                        </tr>
+                      )}
+                    </Fragment>
+                  );
+                })}
               </tbody>
             </table>
           </div>

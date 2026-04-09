@@ -194,7 +194,16 @@ h3 { font-size: 1.1rem; margin-bottom: 0.75rem; }
   transition: border-color 0.15s;
 }
 
-.field input:focus {
+.field select {
+  padding: 0.6rem 0.85rem;
+  border: 1.5px solid #c8d5c0;
+  border-radius: 8px;
+  font-size: 0.95rem;
+  background: rgba(255, 255, 255, 0.9);
+}
+
+.field input:focus,
+.field select:focus {
   outline: none;
   border-color: var(--green-dark);
 }
@@ -264,6 +273,11 @@ h3 { font-size: 1.1rem; margin-bottom: 0.75rem; }
 }
 
 .dataset-table tr:last-child td { border-bottom: none; }
+
+.dataset-table .detail-row td {
+  padding-top: 0;
+  background: rgba(255, 255, 255, 0.35);
+}
 
 .filename { font-weight: 600; word-break: break-all; }
 
@@ -368,6 +382,94 @@ h3 { font-size: 1.1rem; margin-bottom: 0.75rem; }
 /* ── Action buttons row ────────────────────────────────────────────────────── */
 
 .action-btns { display: flex; gap: 0.4rem; flex-wrap: wrap; }
+
+/* ── Dataset details ──────────────────────────────────────────────────────── */
+
+.detail-panel {
+  display: grid;
+  gap: 1rem;
+  padding: 1rem;
+  border: 1px solid #d0dbc8;
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.55);
+}
+
+.pca-options-panel { align-items: start; }
+
+.column-picker {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.45rem;
+}
+
+.check-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+  padding: 0.35rem 0.6rem;
+  border: 1px solid #c8d5c0;
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.68);
+  font-size: 0.85rem;
+  cursor: pointer;
+}
+
+.option-grid {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: end;
+  gap: 1rem;
+}
+
+.compact-field { margin-bottom: 0; min-width: 150px; }
+
+.check-row {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.45rem;
+  min-height: 2.5rem;
+  font-size: 0.9rem;
+}
+
+.run-list {
+  display: grid;
+  gap: 0.75rem;
+}
+
+.run-item {
+  display: flex;
+  justify-content: space-between;
+  gap: 1rem;
+  padding: 0.85rem 0;
+  border-bottom: 1px solid #e4ede0;
+}
+
+.run-item:last-child { border-bottom: none; }
+
+.quality-metrics {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(135px, 1fr));
+  gap: 0.75rem;
+}
+
+.quality-metrics > div {
+  display: grid;
+  gap: 0.2rem;
+}
+
+.quality-warnings {
+  display: grid;
+  gap: 0.35rem;
+  padding: 0.75rem 1rem;
+  border-radius: 8px;
+  background: #fff7dc;
+  color: #624500;
+  font-size: 0.9rem;
+}
+
+.quality-warnings p { margin: 0; }
+
+.quality-table { min-width: 680px; }
 
 /* ── Inline edit ───────────────────────────────────────────────────────────── */
 

@@ -2,8 +2,8 @@
  * PCA module using ml-pca.
  *
  * The ml-pca package performs SVD-based PCA internally with optional centering
- * and scaling. We always center + scale so that columns with different units
- * don't dominate the principal components.
+ * and scaling. By default we center + scale so that columns with different
+ * units don't dominate the principal components.
  */
 import { PCA } from 'ml-pca';
 
@@ -12,6 +12,7 @@ import { PCA } from 'ml-pca';
  *
  * @param {number[][]} matrix  - n_samples x n_features array of numbers
  * @param {number}     nComponents - how many PCs to return (2 or 3)
+ * @param {{ scale?: boolean }} [options]
  * @returns {{
  *   transformed: number[][],
  *   explainedVarianceRatio: number[],
@@ -21,7 +22,7 @@ import { PCA } from 'ml-pca';
  *   nSamples: number
  * }}
  */
-export function runPCA(matrix, nComponents) {
+export function runPCA(matrix, nComponents, options = {}) {
   if (!Array.isArray(matrix) || matrix.length < 2) {
     throw new Error('Need at least 2 samples to perform PCA.');
   }
@@ -35,7 +36,7 @@ export function runPCA(matrix, nComponents) {
   const k = Math.min(nComponents, nFeatures, matrix.length - 1);
 
   // center: subtract column means; scale: divide by column std dev.
-  const pca = new PCA(matrix, { center: true, scale: true });
+  const pca = new PCA(matrix, { center: true, scale: options.scale !== false });
 
   // predict() projects the data onto the first k PCs.
   const scoresMatrix = pca.predict(matrix, { nComponents: k });

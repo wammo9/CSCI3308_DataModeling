@@ -6,7 +6,7 @@
   "scripts": {
     "dev": "nodemon src/index.js",
     "start": "node src/index.js",
-    "test": "mocha test/**/*.spec.js --timeout 10000"
+    "test": "NODE_ENV=test mocha test/**/*.spec.js --timeout 10000"
   },
   "mocha": {
     "spec": "test/**/*.spec.js",
