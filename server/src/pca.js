@@ -10,11 +10,12 @@ import { PCA } from 'ml-pca';
 /**
  * Runs PCA on a 2-D numeric matrix.
  *
- * @param {number[][]} matrix  - n_samples × n_features array of numbers
+ * @param {number[][]} matrix  - n_samples x n_features array of numbers
  * @param {number}     nComponents - how many PCs to return (2 or 3)
  * @returns {{
  *   transformed: number[][],
  *   explainedVarianceRatio: number[],
+ *   allExplainedVariance: number[],
  *   totalExplained: number,
  *   nComponents: number,
  *   nSamples: number
@@ -48,6 +49,7 @@ export function runPCA(matrix, nComponents) {
   return {
     transformed,
     explainedVarianceRatio,
+    allExplainedVariance: allEV,
     totalExplained,
     nComponents: k,
     nSamples: matrix.length,

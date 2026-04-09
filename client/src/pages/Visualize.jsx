@@ -16,6 +16,7 @@ export default function Visualize() {
   const { runId } = useParams();
   const navigate = useNavigate();
   const plotRef = useRef(null);
+  const screeRef = useRef(null);
 
   const [run, setRun] = useState(null);
   const [error, setError] = useState("");
@@ -36,7 +37,7 @@ export default function Visualize() {
     load();
   }, [runId, navigate]);
 
-  // Render the plot once run data is available and the container is mounted
+  // Render plots once run data is available
   useEffect(() => {
     if (!run || !plotRef.current) return;
 
@@ -44,6 +45,7 @@ export default function Visualize() {
       const points = run.transformedData;
       const is3D = run.nComponents >= 3;
 
+      // ── Main scatter plot ──
       const trace = is3D
         ? {
             type: "scatter3d",
@@ -52,8 +54,7 @@ export default function Visualize() {
             y: points.map((p) => p[1]),
             z: points.map((p) => p[2]),
             marker: { size: 5, opacity: 0.8, color: points.map((_, i) => i), colorscale: "Viridis" },
-            hovertemplate:
-              `PC1: %{x:.3f}<br>PC2: %{y:.3f}<br>PC3: %{z:.3f}<extra></extra>`,
+            hovertemplate: `PC1: %{x:.3f}<br>PC2: %{y:.3f}<br>PC3: %{z:.3f}<extra></extra>`,
           }
         : {
             type: "scatter",
@@ -65,7 +66,6 @@ export default function Visualize() {
           };
 
       const evRatios = run.explainedVarianceRatio;
-
       const layout = is3D
         ? {
             scene: {
@@ -88,19 +88,88 @@ export default function Visualize() {
       Plotly.default.newPlot(plotRef.current, [trace], layout, {
         responsive: true,
         displaylogo: false,
-        modeBarButtonsToRemove: ["toImage"],
       });
+
+      // ── Feature 3: Scree plot ──
+      const allEV = run.allExplainedVariance || run.explainedVarianceRatio;
+      if (screeRef.current && allEV.length > 0) {
+        const screeTrace = {
+          type: "bar",
+          x: allEV.map((_, i) => `PC${i + 1}`),
+          y: allEV.map((v) => +(v * 100).toFixed(2)),
+          marker: {
+            color: allEV.map((_, i) =>
+              i < run.nComponents ? "#122620" : "#c8d5c0"
+            ),
+          },
+          hovertemplate: "%{x}: %{y:.1f}%<extra></extra>",
+        };
+        const cumulativeY = [];
+        allEV.reduce((sum, v) => { sum += v; cumulativeY.push(+(sum * 100).toFixed(2)); return sum; }, 0);
+
+        const cumTrace = {
+          type: "scatter",
+          mode: "lines+markers",
+          x: allEV.map((_, i) => `PC${i + 1}`),
+          y: cumulativeY,
+          yaxis: "y2",
+          marker: { color: "#b57a2e", size: 6 },
+          line: { color: "#b57a2e", width: 2 },
+          hovertemplate: "Cumulative: %{y:.1f}%<extra></extra>",
+          name: "Cumulative",
+        };
+
+        Plotly.default.newPlot(screeRef.current, [screeTrace, cumTrace], {
+          yaxis: { title: "Variance explained (%)", range: [0, Math.max(...allEV) * 120] },
+          yaxis2: { title: "Cumulative (%)", overlaying: "y", side: "right", range: [0, 105] },
+          margin: { l: 55, r: 55, t: 30, b: 40 },
+          paper_bgcolor: "rgba(0,0,0,0)",
+          plot_bgcolor: "rgba(255,255,255,0.6)",
+          showlegend: false,
+          bargap: 0.3,
+        }, { responsive: true, displaylogo: false, displayModeBar: false });
+      }
 
       setPlotReady(true);
     });
   }, [run]);
+
+  // ── Feature 4: Export CSV ──
+  async function handleExportCSV() {
+    window.open(`${apiBase}/api/pca/${runId}/export?token=${getToken()}`, "_blank");
+    // Also try with auth header as fallback
+    try {
+      const res = await fetch(`${apiBase}/api/pca/${runId}/export`, { headers: authHeaders() });
+      if (!res.ok) return;
+      const blob = await res.blob();
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = `${run.filename.replace(/\.csv$/i, "")}_pca.csv`;
+      a.click();
+      URL.revokeObjectURL(url);
+    } catch { /* fallback failed, the window.open may have worked */ }
+  }
+
+  // ── Feature 4: Export PNG ──
+  function handleExportPNG() {
+    if (!plotRef.current) return;
+    import("plotly.js-dist-min").then((Plotly) => {
+      Plotly.default.downloadImage(plotRef.current, {
+        format: "png",
+        width: 1200,
+        height: 800,
+        filename: `${run.filename.replace(/\.csv$/i, "")}_pca`,
+      });
+    });
+  }
 
   if (error) {
     return (
       <main className="app-shell centered">
         <div className="card">
           <div className="alert alert-error">{error}</div>
-          <Link to="/projects" className="btn btn-ghost">← Back to projects</Link>
+          <Link to="/projects" className="btn btn-ghost">Back to projects</Link>
         </div>
       </main>
     );
@@ -120,7 +189,7 @@ export default function Visualize() {
     <main className="app-shell">
       <section className="card viz-header">
         <div>
-          <Link to="/projects" className="back-link">← Back to projects</Link>
+          <Link to="/projects" className="back-link">Back to projects</Link>
           <h2>{run.filename}</h2>
         </div>
 
@@ -157,12 +226,33 @@ export default function Visualize() {
             <span key={c} className="tag">{c}</span>
           ))}
         </div>
+
+        {/* Feature 4: Export buttons */}
+        <div className="export-btns">
+          <button className="btn btn-small btn-ghost" onClick={handleExportCSV}>
+            Export CSV
+          </button>
+          <button className="btn btn-small btn-ghost" onClick={handleExportPNG}>
+            Export PNG
+          </button>
+        </div>
       </section>
 
+      {/* Main scatter plot */}
       <section className="card viz-plot-card">
         <h3>{run.nComponents === 3 ? "3D" : "2D"} PCA scatter plot</h3>
         <div ref={plotRef} className="plotly-container" />
         {!plotReady && <p className="muted">Rendering plot…</p>}
+      </section>
+
+      {/* Feature 3: Scree plot */}
+      <section className="card viz-plot-card">
+        <h3>Scree plot</h3>
+        <p className="muted">
+          Variance explained by each principal component.
+          Dark bars are the selected components; light bars are the remaining.
+        </p>
+        <div ref={screeRef} className="plotly-container scree-container" />
       </section>
     </main>
   );

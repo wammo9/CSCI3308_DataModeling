@@ -17,7 +17,16 @@ export default function Projects() {
   const [uploading, setUploading] = useState(false);
   const [uploadError, setUploadError] = useState("");
   const [uploadSuccess, setUploadSuccess] = useState("");
-  const [runningPCA, setRunningPCA] = useState(null); // datasetId currently running PCA
+  const [runningPCA, setRunningPCA] = useState(null);
+
+  // Preview state
+  const [preview, setPreview] = useState(null);
+  const [previewLoading, setPreviewLoading] = useState(false);
+
+  // Editing state
+  const [editingId, setEditingId] = useState(null);
+  const [editName, setEditName] = useState("");
+  const [editNotes, setEditNotes] = useState("");
 
   useEffect(() => {
     fetchDatasets();
@@ -31,7 +40,7 @@ export default function Projects() {
       const data = await res.json();
       setDatasets(data.datasets ?? []);
     } catch {
-      // network error — datasets stays empty
+      // network error
     } finally {
       setLoadingDatasets(false);
     }
@@ -43,10 +52,7 @@ export default function Projects() {
     setUploadSuccess("");
 
     const file = fileRef.current?.files[0];
-    if (!file) {
-      setUploadError("Please select a CSV file.");
-      return;
-    }
+    if (!file) { setUploadError("Please select a CSV file."); return; }
 
     const formData = new FormData();
     formData.append("file", file);
@@ -59,7 +65,6 @@ export default function Projects() {
         body: formData,
       });
       const data = await res.json();
-
       if (!res.ok) {
         setUploadError(data.message || "Upload failed");
       } else {
@@ -69,11 +74,8 @@ export default function Projects() {
         fileRef.current.value = "";
         fetchDatasets();
       }
-    } catch {
-      setUploadError("Could not reach the server.");
-    } finally {
-      setUploading(false);
-    }
+    } catch { setUploadError("Could not reach the server."); }
+    finally { setUploading(false); }
   }
 
   async function handleRunPCA(datasetId) {
@@ -84,17 +86,68 @@ export default function Projects() {
         headers: authHeaders(),
       });
       const data = await res.json();
-
       if (!res.ok) {
         alert("PCA failed: " + (data.message || "Unknown error"));
       } else {
         navigate(`/visualize/${data.runId}`);
       }
-    } catch {
-      alert("Could not reach the server.");
-    } finally {
-      setRunningPCA(null);
-    }
+    } catch { alert("Could not reach the server."); }
+    finally { setRunningPCA(null); }
+  }
+
+  // ── Feature 1: Preview ──
+
+  async function handlePreview(datasetId) {
+    if (preview?.datasetId === datasetId) { setPreview(null); return; }
+    setPreviewLoading(true);
+    try {
+      const res = await fetch(`${apiBase}/api/datasets/${datasetId}/preview`, {
+        headers: authHeaders(),
+      });
+      const data = await res.json();
+      if (res.ok) {
+        setPreview({ datasetId, ...data });
+      }
+    } catch { /* ignore */ }
+    finally { setPreviewLoading(false); }
+  }
+
+  // ── Feature 2: Delete ──
+
+  async function handleDelete(datasetId, filename) {
+    if (!confirm(`Delete "${filename}" and all its PCA runs?`)) return;
+    try {
+      const res = await fetch(`${apiBase}/api/datasets/${datasetId}`, {
+        method: "DELETE",
+        headers: authHeaders(),
+      });
+      if (res.ok) {
+        if (preview?.datasetId === datasetId) setPreview(null);
+        fetchDatasets();
+      }
+    } catch { alert("Could not reach the server."); }
+  }
+
+  // ── Feature 5: Rename / Notes ──
+
+  function startEditing(ds) {
+    setEditingId(ds.id);
+    setEditName(ds.name || ds.original_filename.replace(/\.csv$/i, ""));
+    setEditNotes(ds.notes || "");
+  }
+
+  async function saveEditing() {
+    try {
+      const res = await fetch(`${apiBase}/api/datasets/${editingId}`, {
+        method: "PATCH",
+        headers: { ...authHeaders(), "Content-Type": "application/json" },
+        body: JSON.stringify({ name: editName, notes: editNotes }),
+      });
+      if (res.ok) {
+        setEditingId(null);
+        fetchDatasets();
+      }
+    } catch { alert("Could not reach the server."); }
   }
 
   return (
@@ -111,12 +164,7 @@ export default function Projects() {
         {uploadSuccess && <div className="alert alert-success">{uploadSuccess}</div>}
 
         <form onSubmit={handleUpload} className="upload-form">
-          <input
-            ref={fileRef}
-            type="file"
-            accept=".csv,text/csv"
-            className="file-input"
-          />
+          <input ref={fileRef} type="file" accept=".csv,text/csv" className="file-input" />
           <button className="btn btn-primary" disabled={uploading}>
             {uploading ? "Uploading…" : "Upload CSV"}
           </button>
@@ -130,28 +178,57 @@ export default function Projects() {
         {loadingDatasets ? (
           <p className="muted">Loading…</p>
         ) : datasets.length === 0 ? (
-          <p className="empty-state">
-            No datasets yet. Upload a CSV above to get started.
-          </p>
+          <p className="empty-state">No datasets yet. Upload a CSV above to get started.</p>
         ) : (
           <div className="dataset-table-wrap">
             <table className="dataset-table">
               <thead>
                 <tr>
-                  <th>Filename</th>
+                  <th>Name</th>
+                  <th>File</th>
                   <th>Rows</th>
-                  <th>Columns</th>
                   <th>Numeric features</th>
                   <th>Uploaded</th>
-                  <th></th>
+                  <th>Actions</th>
                 </tr>
               </thead>
               <tbody>
                 {datasets.map((ds) => (
                   <tr key={ds.id}>
-                    <td className="filename">{ds.original_filename}</td>
+                    {/* Name cell — inline editing */}
+                    <td>
+                      {editingId === ds.id ? (
+                        <div className="edit-inline">
+                          <input
+                            type="text"
+                            value={editName}
+                            onChange={(e) => setEditName(e.target.value)}
+                            className="edit-input"
+                            placeholder="Name"
+                          />
+                          <textarea
+                            value={editNotes}
+                            onChange={(e) => setEditNotes(e.target.value)}
+                            className="edit-textarea"
+                            placeholder="Notes (optional)"
+                            rows={2}
+                          />
+                          <div className="edit-actions">
+                            <button className="btn btn-small btn-primary" onClick={saveEditing}>Save</button>
+                            <button className="btn btn-small btn-ghost" onClick={() => setEditingId(null)}>Cancel</button>
+                          </div>
+                        </div>
+                      ) : (
+                        <div>
+                          <span className="filename">
+                            {ds.name || ds.original_filename.replace(/\.csv$/i, "")}
+                          </span>
+                          {ds.notes && <p className="ds-notes">{ds.notes}</p>}
+                        </div>
+                      )}
+                    </td>
+                    <td className="muted">{ds.original_filename}</td>
                     <td>{ds.row_count}</td>
-                    <td>{ds.column_count}</td>
                     <td>
                       <span className="tag-list">
                         {(ds.quantitative_columns ?? []).map((col) => (
@@ -159,17 +236,32 @@ export default function Projects() {
                         ))}
                       </span>
                     </td>
-                    <td className="muted">
-                      {new Date(ds.upload_timestamp).toLocaleDateString()}
-                    </td>
+                    <td className="muted">{new Date(ds.upload_timestamp).toLocaleDateString()}</td>
                     <td>
-                      <button
-                        className="btn btn-small btn-primary"
-                        disabled={runningPCA === ds.id}
-                        onClick={() => handleRunPCA(ds.id)}
-                      >
-                        {runningPCA === ds.id ? "Running…" : "Run PCA →"}
-                      </button>
+                      <div className="action-btns">
+                        <button
+                          className="btn btn-small btn-primary"
+                          disabled={runningPCA === ds.id}
+                          onClick={() => handleRunPCA(ds.id)}
+                        >
+                          {runningPCA === ds.id ? "Running…" : "PCA"}
+                        </button>
+                        <button
+                          className="btn btn-small btn-ghost"
+                          onClick={() => handlePreview(ds.id)}
+                        >
+                          {preview?.datasetId === ds.id ? "Hide" : "Preview"}
+                        </button>
+                        <button className="btn btn-small btn-ghost" onClick={() => startEditing(ds)}>
+                          Edit
+                        </button>
+                        <button
+                          className="btn btn-small btn-danger"
+                          onClick={() => handleDelete(ds.id, ds.original_filename)}
+                        >
+                          Delete
+                        </button>
+                      </div>
                     </td>
                   </tr>
                 ))}
@@ -178,6 +270,42 @@ export default function Projects() {
           </div>
         )}
       </section>
+
+      {/* ── Preview panel ── */}
+      {preview && (
+        <section className="card">
+          <h3>Preview: {preview.filename}</h3>
+          <p className="muted">
+            Showing first {preview.preview.length} of {preview.totalRows} rows.
+            Numeric columns are highlighted.
+          </p>
+          <div className="dataset-table-wrap">
+            <table className="dataset-table preview-table">
+              <thead>
+                <tr>
+                  {preview.columns.map((col) => (
+                    <th
+                      key={col}
+                      className={preview.quantitativeColumns.includes(col) ? "col-numeric" : ""}
+                    >
+                      {col}
+                    </th>
+                  ))}
+                </tr>
+              </thead>
+              <tbody>
+                {preview.preview.map((row, i) => (
+                  <tr key={i}>
+                    {preview.columns.map((col) => (
+                      <td key={col}>{row[col]}</td>
+                    ))}
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </section>
+      )}
     </main>
   );
 }

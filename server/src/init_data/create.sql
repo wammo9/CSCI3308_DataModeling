@@ -13,26 +13,33 @@ CREATE TABLE users (
 );
 
 -- Stores metadata and the parsed numeric matrix for each uploaded CSV.
--- raw_data is a JSON array of arrays (rows × quant columns).
+-- raw_data is a JSON array of arrays (rows x quant columns).
+-- preview_data stores the first 10 rows with ALL original columns for preview.
 CREATE TABLE datasets (
     id                    SERIAL PRIMARY KEY,
     user_id               INTEGER      REFERENCES users(id) ON DELETE CASCADE,
     original_filename     VARCHAR(255) NOT NULL,
+    name                  TEXT,
+    notes                 TEXT         DEFAULT '',
     row_count             INTEGER,
     column_count          INTEGER,
     quantitative_columns  TEXT[],
+    all_columns           TEXT[],
     raw_data              JSONB,
+    preview_data          JSONB,
     upload_timestamp      TIMESTAMPTZ  DEFAULT NOW()
 );
 
 -- Stores PCA run results so the visualization can be fetched without re-computing.
+-- all_explained_variance stores variance for ALL components (for scree plot).
 CREATE TABLE pca_runs (
-    id                      SERIAL PRIMARY KEY,
-    dataset_id              INTEGER      REFERENCES datasets(id) ON DELETE CASCADE,
-    n_components            INTEGER      NOT NULL,
+    id                       SERIAL PRIMARY KEY,
+    dataset_id               INTEGER      REFERENCES datasets(id) ON DELETE CASCADE,
+    n_components             INTEGER      NOT NULL,
     explained_variance_ratio JSONB,
-    transformed_data        JSONB,
-    column_names            TEXT[],
-    n_samples               INTEGER,
-    created_at              TIMESTAMPTZ  DEFAULT NOW()
+    all_explained_variance   JSONB,
+    transformed_data         JSONB,
+    column_names             TEXT[],
+    n_samples                INTEGER,
+    created_at               TIMESTAMPTZ  DEFAULT NOW()
 );

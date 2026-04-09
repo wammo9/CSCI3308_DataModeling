@@ -12,11 +12,16 @@
  * POST /register                     create account (returns JWT)
  * POST /api/login                    authenticate (returns JWT)
  *
- * GET  /api/datasets                 list user's datasets       [auth]
- * POST /api/datasets/upload          upload + parse a CSV       [auth]
- * POST /api/datasets/:id/pca         run PCA on a dataset       [auth]
- * GET  /api/datasets/:id/pca         list PCA runs for dataset  [auth]
- * GET  /api/pca/:id                  fetch a single PCA result  [auth]
+ * GET    /api/datasets               list user's datasets       [auth]
+ * POST   /api/datasets/upload        upload + parse a CSV       [auth]
+ * GET    /api/datasets/:id/preview   first 10 rows of dataset   [auth]
+ * PATCH  /api/datasets/:id           rename / add notes         [auth]
+ * DELETE /api/datasets/:id           delete dataset + PCA runs  [auth]
+ * POST   /api/datasets/:id/pca      run PCA on a dataset       [auth]
+ * GET    /api/datasets/:id/pca      list PCA runs for dataset   [auth]
+ * GET    /api/pca/:id               fetch a single PCA result   [auth]
+ * GET    /api/pca/:id/export        download transformed CSV    [auth]
+ * DELETE /api/pca/:id               delete a PCA run            [auth]
  */
 
 import cors from 'cors';
@@ -65,7 +70,7 @@ function requireAuth(req, res, next) {
   }
 }
 
-// Helper: resolve userId from token (token always includes it after registration)
+// Helper: resolve userId from token
 async function resolveUserId(req) {
   if (req.user.userId) return req.user.userId;
   const r = await pool.query('SELECT id FROM users WHERE username = $1', [req.user.username]);
@@ -173,8 +178,8 @@ app.get('/api/datasets', requireAuth, async (req, res) => {
   try {
     const uid = await resolveUserId(req);
     const result = await pool.query(
-      `SELECT id, original_filename, row_count, column_count,
-              quantitative_columns, upload_timestamp
+      `SELECT id, original_filename, name, notes, row_count, column_count,
+              quantitative_columns, all_columns, upload_timestamp
        FROM datasets
        WHERE user_id = $1
        ORDER BY upload_timestamp DESC`,
@@ -240,14 +245,32 @@ app.post('/api/datasets/upload', requireAuth, upload.single('file'), async (req,
   // Build numeric matrix
   const matrix = clean.map((row) => quantColumns.map((col) => Number(row[col])));
 
+  // Build preview: first 10 rows with ALL columns (for dataset preview feature)
+  const preview = records.slice(0, 10).map((row) => {
+    const obj = {};
+    for (const col of allColumns) obj[col] = row[col];
+    return obj;
+  });
+
   try {
     const uid = await resolveUserId(req);
     const result = await pool.query(
       `INSERT INTO datasets
-         (user_id, original_filename, row_count, column_count, quantitative_columns, raw_data)
-       VALUES ($1, $2, $3, $4, $5, $6)
+         (user_id, original_filename, name, row_count, column_count,
+          quantitative_columns, all_columns, raw_data, preview_data)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
        RETURNING id`,
-      [uid, req.file.originalname, clean.length, allColumns.length, quantColumns, JSON.stringify(matrix)]
+      [
+        uid,
+        req.file.originalname,
+        req.file.originalname.replace(/\.csv$/i, ''),
+        clean.length,
+        allColumns.length,
+        quantColumns,
+        allColumns,
+        JSON.stringify(matrix),
+        JSON.stringify(preview),
+      ]
     );
     return res.json({
       status: 'success',
@@ -260,6 +283,136 @@ app.post('/api/datasets/upload', requireAuth, upload.single('file'), async (req,
   } catch (err) {
     console.error('Upload error:', err);
     return res.status(500).json({ status: 'error', message: 'Failed to save dataset' });
+  }
+});
+
+// ── FEATURE 1: Dataset Preview ───────────────────────────────────────────────
+
+app.get('/api/datasets/:id/preview', requireAuth, async (req, res) => {
+  const datasetId = parseInt(req.params.id, 10);
+  if (isNaN(datasetId)) {
+    return res.status(400).json({ status: 'error', message: 'Invalid dataset id' });
+  }
+
+  try {
+    const uid = await resolveUserId(req);
+    const result = await pool.query(
+      `SELECT preview_data, all_columns, quantitative_columns, original_filename, row_count
+       FROM datasets WHERE id = $1 AND user_id = $2`,
+      [datasetId, uid]
+    );
+    if (!result.rows.length) {
+      return res.status(404).json({ status: 'error', message: 'Dataset not found' });
+    }
+    const ds = result.rows[0];
+    return res.json({
+      status: 'success',
+      filename: ds.original_filename,
+      totalRows: ds.row_count,
+      columns: ds.all_columns,
+      quantitativeColumns: ds.quantitative_columns,
+      preview: ds.preview_data ?? [],
+    });
+  } catch (err) {
+    console.error('Preview error:', err);
+    return res.status(500).json({ status: 'error', message: 'Server error' });
+  }
+});
+
+// ── FEATURE 2: Delete Dataset ────────────────────────────────────────────────
+
+app.delete('/api/datasets/:id', requireAuth, async (req, res) => {
+  const datasetId = parseInt(req.params.id, 10);
+  if (isNaN(datasetId)) {
+    return res.status(400).json({ status: 'error', message: 'Invalid dataset id' });
+  }
+
+  try {
+    const uid = await resolveUserId(req);
+    const result = await pool.query(
+      'DELETE FROM datasets WHERE id = $1 AND user_id = $2 RETURNING id',
+      [datasetId, uid]
+    );
+    if (!result.rows.length) {
+      return res.status(404).json({ status: 'error', message: 'Dataset not found' });
+    }
+    return res.json({ status: 'success', message: 'Dataset deleted' });
+  } catch (err) {
+    console.error('Delete dataset error:', err);
+    return res.status(500).json({ status: 'error', message: 'Server error' });
+  }
+});
+
+// ── FEATURE 2: Delete PCA Run ────────────────────────────────────────────────
+
+app.delete('/api/pca/:id', requireAuth, async (req, res) => {
+  const runId = parseInt(req.params.id, 10);
+  if (isNaN(runId)) {
+    return res.status(400).json({ status: 'error', message: 'Invalid run id' });
+  }
+
+  try {
+    const uid = await resolveUserId(req);
+    // Verify ownership through the dataset join
+    const result = await pool.query(
+      `DELETE FROM pca_runs
+       WHERE id = $1
+         AND dataset_id IN (SELECT id FROM datasets WHERE user_id = $2)
+       RETURNING id`,
+      [runId, uid]
+    );
+    if (!result.rows.length) {
+      return res.status(404).json({ status: 'error', message: 'PCA run not found' });
+    }
+    return res.json({ status: 'success', message: 'PCA run deleted' });
+  } catch (err) {
+    console.error('Delete PCA run error:', err);
+    return res.status(500).json({ status: 'error', message: 'Server error' });
+  }
+});
+
+// ── FEATURE 5: Rename / Add Notes ────────────────────────────────────────────
+
+app.patch('/api/datasets/:id', requireAuth, async (req, res) => {
+  const datasetId = parseInt(req.params.id, 10);
+  if (isNaN(datasetId)) {
+    return res.status(400).json({ status: 'error', message: 'Invalid dataset id' });
+  }
+
+  const { name, notes } = req.body ?? {};
+  if (name === undefined && notes === undefined) {
+    return res.status(400).json({ status: 'error', message: 'Provide name or notes to update' });
+  }
+
+  try {
+    const uid = await resolveUserId(req);
+
+    const fields = [];
+    const values = [];
+    let idx = 1;
+    if (name !== undefined) {
+      fields.push(`name = $${idx++}`);
+      values.push(String(name).slice(0, 255));
+    }
+    if (notes !== undefined) {
+      fields.push(`notes = $${idx++}`);
+      values.push(String(notes).slice(0, 2000));
+    }
+    values.push(datasetId, uid);
+
+    const result = await pool.query(
+      `UPDATE datasets SET ${fields.join(', ')}
+       WHERE id = $${idx++} AND user_id = $${idx}
+       RETURNING id, name, notes`,
+      values
+    );
+    if (!result.rows.length) {
+      return res.status(404).json({ status: 'error', message: 'Dataset not found' });
+    }
+    return res.json({ status: 'success', dataset: result.rows[0] });
+  } catch (err) {
+    console.error('Patch dataset error:', err);
+    return res.status(500).json({ status: 'error', message: 'Server error' });
   }
 });
 
@@ -283,7 +436,7 @@ app.post('/api/datasets/:id/pca', requireAuth, async (req, res) => {
     }
 
     const ds = dsResult.rows[0];
-    const matrix = ds.raw_data; // already parsed from JSONB by pg driver
+    const matrix = ds.raw_data;
     const nFeatures = ds.quantitative_columns.length;
 
     // Decide on number of output components
@@ -298,13 +451,15 @@ app.post('/api/datasets/:id/pca', requireAuth, async (req, res) => {
 
     const runResult = await pool.query(
       `INSERT INTO pca_runs
-         (dataset_id, n_components, explained_variance_ratio, transformed_data, column_names, n_samples)
-       VALUES ($1, $2, $3, $4, $5, $6)
+         (dataset_id, n_components, explained_variance_ratio,
+          all_explained_variance, transformed_data, column_names, n_samples)
+       VALUES ($1, $2, $3, $4, $5, $6, $7)
        RETURNING id`,
       [
         datasetId,
         pcaResult.nComponents,
         JSON.stringify(pcaResult.explainedVarianceRatio),
+        JSON.stringify(pcaResult.allExplainedVariance),
         JSON.stringify(pcaResult.transformed),
         ds.quantitative_columns,
         pcaResult.nSamples,
@@ -316,6 +471,7 @@ app.post('/api/datasets/:id/pca', requireAuth, async (req, res) => {
       runId: runResult.rows[0].id,
       nComponents: pcaResult.nComponents,
       explainedVarianceRatio: pcaResult.explainedVarianceRatio,
+      allExplainedVariance: pcaResult.allExplainedVariance,
       totalExplained: pcaResult.totalExplained,
       nSamples: pcaResult.nSamples,
       columnNames: ds.quantitative_columns,
@@ -369,6 +525,7 @@ app.get('/api/pca/:id', requireAuth, async (req, res) => {
       filename: run.original_filename,
       nComponents: run.n_components,
       explainedVarianceRatio: run.explained_variance_ratio,
+      allExplainedVariance: run.all_explained_variance,
       transformedData: run.transformed_data,
       columnNames: run.column_names,
       nSamples: run.n_samples,
@@ -376,6 +533,43 @@ app.get('/api/pca/:id', requireAuth, async (req, res) => {
     });
   } catch (err) {
     console.error('Get PCA run error:', err);
+    return res.status(500).json({ status: 'error', message: 'Server error' });
+  }
+});
+
+// ── FEATURE 4: Export Transformed Data as CSV ────────────────────────────────
+
+app.get('/api/pca/:id/export', requireAuth, async (req, res) => {
+  const runId = parseInt(req.params.id, 10);
+  if (isNaN(runId)) {
+    return res.status(400).json({ status: 'error', message: 'Invalid run id' });
+  }
+  try {
+    const uid = await resolveUserId(req);
+    const result = await pool.query(
+      `SELECT r.transformed_data, r.n_components, r.n_samples, d.original_filename
+       FROM pca_runs r
+       JOIN datasets d ON d.id = r.dataset_id
+       WHERE r.id = $1 AND d.user_id = $2`,
+      [runId, uid]
+    );
+    if (!result.rows.length) {
+      return res.status(404).json({ status: 'error', message: 'PCA run not found' });
+    }
+
+    const { transformed_data, n_components, original_filename } = result.rows[0];
+    const headers = Array.from({ length: n_components }, (_, i) => `PC${i + 1}`);
+    const lines = [headers.join(',')];
+    for (const row of transformed_data) {
+      lines.push(row.map((v) => v.toFixed(6)).join(','));
+    }
+
+    const csvName = original_filename.replace(/\.csv$/i, '') + '_pca.csv';
+    res.setHeader('Content-Type', 'text/csv');
+    res.setHeader('Content-Disposition', `attachment; filename="${csvName}"`);
+    return res.send(lines.join('\n'));
+  } catch (err) {
+    console.error('Export PCA error:', err);
     return res.status(500).json({ status: 'error', message: 'Server error' });
   }
 });
