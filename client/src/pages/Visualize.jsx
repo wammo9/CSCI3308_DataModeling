@@ -26,6 +26,8 @@ export default function Visualize() {
   const [clusterData, setClusterData] = useState(null);
   const [clusterLoading, setClusterLoading] = useState(false);
   const [loadingsComponent, setLoadingsComponent] = useState(0);
+  const [colorBy, setColorBy] = useState("row");
+  const [selectedPoint, setSelectedPoint] = useState(null);
 
   useEffect(() => {
     async function load() {
@@ -50,28 +52,51 @@ export default function Visualize() {
       const points = run.transformedData;
       const is3D = run.nComponents >= 3;
 
-      // ── Main scatter plot ──
-      const markerColor = clusterData?.labels ?? points.map((_, i) => i);
-      const markerScale = clusterData ? "Portland" : "Viridis";
-      const clusterHover = clusterData ? "<br>Cluster: %{marker.color}" : "";
-      const trace = is3D
-        ? {
+      function makeTrace(groupPoints, name, pointIndexes, marker = {}) {
+        const hoverLabel = name ? `<br>${colorBy.replace(/^label:/, "")}: ${name}` : "";
+        return is3D
+          ? {
             type: "scatter3d",
             mode: "markers",
-            x: points.map((p) => p[0]),
-            y: points.map((p) => p[1]),
-            z: points.map((p) => p[2]),
-            marker: { size: 5, opacity: 0.8, color: markerColor, colorscale: markerScale },
-            hovertemplate: `PC1: %{x:.3f}<br>PC2: %{y:.3f}<br>PC3: %{z:.3f}${clusterHover}<extra></extra>`,
+            name,
+            x: groupPoints.map((p) => p[0]),
+            y: groupPoints.map((p) => p[1]),
+            z: groupPoints.map((p) => p[2]),
+            customdata: pointIndexes,
+            marker: { size: 5, opacity: 0.8, ...marker },
+            hovertemplate: `PC1: %{x:.3f}<br>PC2: %{y:.3f}<br>PC3: %{z:.3f}${hoverLabel}<extra></extra>`,
           }
-        : {
+          : {
             type: "scatter",
             mode: "markers",
-            x: points.map((p) => p[0]),
-            y: points.map((p) => p[1]),
-            marker: { size: 8, opacity: 0.8, color: markerColor, colorscale: markerScale },
-            hovertemplate: `PC1: %{x:.3f}<br>PC2: %{y:.3f}${clusterHover}<extra></extra>`,
+            name,
+            x: groupPoints.map((p) => p[0]),
+            y: groupPoints.map((p) => p[1]),
+            customdata: pointIndexes,
+            marker: { size: 8, opacity: 0.8, ...marker },
+            hovertemplate: `PC1: %{x:.3f}<br>PC2: %{y:.3f}${hoverLabel}<extra></extra>`,
           };
+      }
+
+      // ── Main scatter plot ──
+      const pointIndexes = points.map((_, i) => i);
+      const labelColumn = colorBy.startsWith("label:") ? colorBy.slice(6) : "";
+      const traces = labelColumn
+        ? [...new Set((run.rowMetadata ?? []).map((row) => row.labels?.[labelColumn] || "Unlabeled"))]
+            .map((label) => {
+              const grouped = points
+                .map((point, index) => ({ point, index }))
+                .filter(({ index }) => ((run.rowMetadata ?? [])[index]?.labels?.[labelColumn] || "Unlabeled") === label);
+              return makeTrace(
+                grouped.map(({ point }) => point),
+                label,
+                grouped.map(({ index }) => index),
+              );
+            })
+        : [makeTrace(points, "", pointIndexes, {
+            color: colorBy === "cluster" && clusterData ? clusterData.labels : pointIndexes,
+            colorscale: colorBy === "cluster" && clusterData ? "Portland" : "Viridis",
+          })];
 
       const evRatios = run.explainedVarianceRatio;
       const layout = is3D
@@ -93,9 +118,23 @@ export default function Visualize() {
             plot_bgcolor: "rgba(255,255,255,0.6)",
           };
 
-      Plotly.default.newPlot(plotRef.current, [trace], layout, {
+      Plotly.default.newPlot(plotRef.current, traces, layout, {
         responsive: true,
         displaylogo: false,
+      }).then(() => {
+        if (plotRef.current?.on) {
+          plotRef.current.on("plotly_click", (event) => {
+            const index = event.points?.[0]?.customdata;
+            if (index !== undefined) {
+              setSelectedPoint({
+                index,
+                coords: points[index],
+                metadata: run.rowMetadata?.[index] ?? null,
+                cluster: clusterData?.labels?.[index],
+              });
+            }
+          });
+        }
       });
 
       // ── Feature 3: Scree plot ──
@@ -159,7 +198,7 @@ export default function Visualize() {
 
       setPlotReady(true);
     });
-  }, [run, clusterData, loadingsComponent]);
+  }, [run, clusterData, loadingsComponent, colorBy]);
 
   async function handleRunClusters() {
     setClusterLoading(true);
@@ -168,12 +207,34 @@ export default function Visualize() {
         headers: authHeaders(),
       });
       const data = await res.json();
-      if (res.ok) setClusterData(data.clusters);
+      if (res.ok) {
+        setClusterData(data.clusters);
+        setColorBy("cluster");
+      }
       else alert(data.message || "Could not cluster this PCA run.");
     } catch {
       alert("Could not reach the server.");
     } finally {
       setClusterLoading(false);
+    }
+  }
+
+  async function handleExportReport() {
+    try {
+      const res = await fetch(`${apiBase}/api/pca/${runId}/report`, { headers: authHeaders() });
+      if (!res.ok) {
+        alert("Could not create report.");
+        return;
+      }
+      const blob = await res.blob();
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = `${run.filename.replace(/\.csv$/i, "")}_pca_report.html`;
+      a.click();
+      URL.revokeObjectURL(url);
+    } catch {
+      alert("Could not reach the server.");
     }
   }
 
@@ -235,6 +296,16 @@ export default function Visualize() {
   }
 
   const totalPct = run.explainedVarianceRatio.reduce((s, v) => s + v, 0);
+  const pcaInsights = [
+    `The selected components explain ${pct(totalPct)} of the numeric variation in this run.`,
+    run.explainedVarianceRatio[0] >= 0.5
+      ? `PC1 carries most of the structure by itself at ${pct(run.explainedVarianceRatio[0])}.`
+      : `The structure is spread across multiple components; PC1 explains ${pct(run.explainedVarianceRatio[0])}.`,
+  ];
+  if (run.loadings?.[0]?.length) {
+    const top = topContributors(0)[0];
+    if (top) pcaInsights.push(`${top.name} is the strongest contributor to PC1 in this run.`);
+  }
 
   return (
     <main className="app-shell">
@@ -278,6 +349,12 @@ export default function Visualize() {
           ))}
         </div>
 
+        <div className="insight-grid">
+          {pcaInsights.map((insight) => (
+            <div key={insight} className="insight-card">{insight}</div>
+          ))}
+        </div>
+
         {/* Feature 4: Export buttons */}
         <div className="export-btns">
           <button className="btn btn-small btn-ghost" onClick={handleExportCSV}>
@@ -286,14 +363,66 @@ export default function Visualize() {
           <button className="btn btn-small btn-ghost" onClick={handleExportPNG}>
             Export PNG
           </button>
+          <button className="btn btn-small btn-ghost" onClick={handleExportReport}>
+            Export report
+          </button>
         </div>
       </section>
 
       {/* Main scatter plot */}
       <section className="card viz-plot-card">
         <h3>{run.nComponents === 3 ? "3D" : "2D"} PCA scatter plot</h3>
+        <div className="analysis-controls">
+          <label className="field compact-field">
+            <span>Color by</span>
+            <select
+              value={colorBy}
+              onChange={(e) => {
+                setColorBy(e.target.value);
+                setSelectedPoint(null);
+              }}
+            >
+              <option value="row">Row order</option>
+              {clusterData && <option value="cluster">Cluster</option>}
+              {(run.labelColumns ?? []).map((col) => (
+                <option key={col} value={`label:${col}`}>{col}</option>
+              ))}
+            </select>
+          </label>
+        </div>
         <div ref={plotRef} className="plotly-container" />
         {!plotReady && <p className="muted">Rendering plot…</p>}
+        {selectedPoint && (
+          <div className="inspector-panel">
+            <h3>Selected point {selectedPoint.index + 1}</h3>
+            <div className="inspector-grid">
+              {selectedPoint.cluster !== undefined && (
+                <div>
+                  <span className="meta-label">Cluster</span>
+                  <strong>{selectedPoint.cluster}</strong>
+                </div>
+              )}
+              {(selectedPoint.coords ?? []).map((value, index) => (
+                <div key={`pc-${index}`}>
+                  <span className="meta-label">PC{index + 1}</span>
+                  <strong>{value.toFixed(3)}</strong>
+                </div>
+              ))}
+              {Object.entries(selectedPoint.metadata?.labels ?? {}).map(([key, value]) => (
+                <div key={key}>
+                  <span className="meta-label">{key}</span>
+                  <strong>{value || "n/a"}</strong>
+                </div>
+              ))}
+              {Object.entries(selectedPoint.metadata?.numeric ?? {}).map(([key, value]) => (
+                <div key={key}>
+                  <span className="meta-label">{key}</span>
+                  <strong>{Number(value).toFixed(3)}</strong>
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
       </section>
 
       <section className="card viz-plot-card">
@@ -314,7 +443,13 @@ export default function Visualize() {
             {clusterLoading ? "Clustering…" : "Run clustering"}
           </button>
           {clusterData && (
-            <button className="btn btn-small btn-ghost" onClick={() => setClusterData(null)}>
+            <button
+              className="btn btn-small btn-ghost"
+              onClick={() => {
+                setClusterData(null);
+                if (colorBy === "cluster") setColorBy("row");
+              }}
+            >
               Clear clusters
             </button>
           )}

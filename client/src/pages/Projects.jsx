@@ -30,6 +30,8 @@ export default function Projects() {
   const [uploadError, setUploadError] = useState("");
   const [uploadSuccess, setUploadSuccess] = useState("");
   const [runningPCA, setRunningPCA] = useState(null);
+  const [samples, setSamples] = useState([]);
+  const [sampleLoadingId, setSampleLoadingId] = useState(null);
 
   // Preview state
   const [preview, setPreview] = useState(null);
@@ -63,9 +65,12 @@ export default function Projects() {
   const [distributionColumn, setDistributionColumn] = useState("");
   const [scatterX, setScatterX] = useState("");
   const [scatterY, setScatterY] = useState("");
+  const [analysisColorBy, setAnalysisColorBy] = useState("row");
+  const [selectedAnalysisPoint, setSelectedAnalysisPoint] = useState(null);
 
   useEffect(() => {
     fetchDatasets();
+    fetchSamples();
   }, []);
 
   useEffect(() => {
@@ -122,22 +127,49 @@ export default function Projects() {
         showlegend: false,
       }, { responsive: true, displaylogo: false });
 
-      Plotly.default.newPlot(scatterRef.current, [{
-        type: "scatter",
-        mode: "markers",
-        x: xValues,
-        y: yValues,
-        marker: { size: 8, opacity: 0.75, color: rows.map((_, i) => i), colorscale: "Viridis" },
-        hovertemplate: `${cols[xIndex]}: %{x:.3f}<br>${cols[yIndex]}: %{y:.3f}<extra></extra>`,
-      }], {
+      const scatterTraces = analysisColorBy === "row"
+        ? [{
+            type: "scatter",
+            mode: "markers",
+            x: xValues,
+            y: yValues,
+            customdata: rows.map((_, i) => i),
+            marker: { size: 8, opacity: 0.75, color: rows.map((_, i) => i), colorscale: "Viridis" },
+            hovertemplate: `${cols[xIndex]}: %{x:.3f}<br>${cols[yIndex]}: %{y:.3f}<extra></extra>`,
+          }]
+        : [...new Set(rows.map((row) => row.metadata?.labels?.[analysisColorBy] || "Unlabeled"))]
+            .map((label) => {
+              const grouped = rows
+                .map((row, index) => ({ row, index }))
+                .filter(({ row }) => (row.metadata?.labels?.[analysisColorBy] || "Unlabeled") === label);
+              return {
+                type: "scatter",
+                mode: "markers",
+                name: label,
+                x: grouped.map(({ row }) => row.values[xIndex]),
+                y: grouped.map(({ row }) => row.values[yIndex]),
+                customdata: grouped.map(({ index }) => index),
+                marker: { size: 8, opacity: 0.78 },
+                hovertemplate: `${cols[xIndex]}: %{x:.3f}<br>${cols[yIndex]}: %{y:.3f}<br>${analysisColorBy}: ${label}<extra></extra>`,
+              };
+            });
+
+      Plotly.default.newPlot(scatterRef.current, scatterTraces, {
         xaxis: { title: cols[xIndex] },
         yaxis: { title: cols[yIndex] },
         margin: { l: 60, r: 20, t: 20, b: 60 },
         paper_bgcolor: "rgba(0,0,0,0)",
         plot_bgcolor: "rgba(255,255,255,0.6)",
-      }, { responsive: true, displaylogo: false });
+      }, { responsive: true, displaylogo: false }).then(() => {
+        if (scatterRef.current?.on) {
+          scatterRef.current.on("plotly_click", (event) => {
+            const index = event.points?.[0]?.customdata;
+            if (index !== undefined) setSelectedAnalysisPoint(rows[index]);
+          });
+        }
+      });
     });
-  }, [openAnalysisId, analysisByDataset, distributionColumn, scatterX, scatterY]);
+  }, [openAnalysisId, analysisByDataset, distributionColumn, scatterX, scatterY, analysisColorBy]);
 
   async function fetchDatasets() {
     setLoadingDatasets(true);
@@ -150,6 +182,39 @@ export default function Projects() {
       // network error
     } finally {
       setLoadingDatasets(false);
+    }
+  }
+
+  async function fetchSamples() {
+    try {
+      const res = await fetch(`${apiBase}/api/samples`, { headers: authHeaders() });
+      const data = await res.json();
+      if (res.ok) setSamples(data.samples ?? []);
+    } catch {
+      // samples are a convenience, so upload stays usable if this fails
+    }
+  }
+
+  async function handleAddSample(sampleId) {
+    setUploadError("");
+    setUploadSuccess("");
+    setSampleLoadingId(sampleId);
+    try {
+      const res = await fetch(`${apiBase}/api/samples/${sampleId}`, {
+        method: "POST",
+        headers: authHeaders(),
+      });
+      const data = await res.json();
+      if (!res.ok) {
+        setUploadError(data.message || "Could not add sample dataset");
+      } else {
+        setUploadSuccess(`"${data.filename}" added as a sample dataset.`);
+        fetchDatasets();
+      }
+    } catch {
+      setUploadError("Could not reach the server.");
+    } finally {
+      setSampleLoadingId(null);
     }
   }
 
@@ -343,6 +408,8 @@ export default function Projects() {
       setDistributionColumn(cols[0] || "");
       setScatterX(cols[0] || "");
       setScatterY(cols[1] || cols[0] || "");
+      setAnalysisColorBy("row");
+      setSelectedAnalysisPoint(null);
       return;
     }
 
@@ -358,9 +425,32 @@ export default function Projects() {
         setDistributionColumn(cols[0] || "");
         setScatterX(cols[0] || "");
         setScatterY(cols[1] || cols[0] || "");
+        setAnalysisColorBy("row");
+        setSelectedAnalysisPoint(null);
       }
     } catch { alert("Could not reach the server."); }
     finally { setAnalysisLoadingId(null); }
+  }
+
+  async function handleDownloadReport(datasetId, filename) {
+    try {
+      const res = await fetch(`${apiBase}/api/datasets/${datasetId}/report`, {
+        headers: authHeaders(),
+      });
+      if (!res.ok) {
+        alert("Could not create report.");
+        return;
+      }
+      const blob = await res.blob();
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = `${filename.replace(/\.csv$/i, "")}_report.html`;
+      a.click();
+      URL.revokeObjectURL(url);
+    } catch {
+      alert("Could not reach the server.");
+    }
   }
 
   // ── Feature 2: Delete ──
@@ -420,6 +510,24 @@ export default function Projects() {
             {uploading ? "Uploading…" : "Upload CSV"}
           </button>
         </form>
+
+        {samples.length > 0 && (
+          <div className="sample-list">
+            <p className="muted">No CSV handy? Start with a sample dataset.</p>
+            <div className="action-btns">
+              {samples.map((sample) => (
+                <button
+                  key={sample.id}
+                  className="btn btn-small btn-ghost"
+                  disabled={sampleLoadingId === sample.id}
+                  onClick={() => handleAddSample(sample.id)}
+                >
+                  {sampleLoadingId === sample.id ? "Adding…" : sample.name}
+                </button>
+              ))}
+            </div>
+          </div>
+        )}
       </section>
 
       {/* ── Dataset list ── */}
@@ -741,6 +849,21 @@ export default function Projects() {
 
                               {analysis && (
                                 <>
+                                  {(analysis.insights ?? []).length > 0 && (
+                                    <div className="insight-grid">
+                                      {analysis.insights.map((insight) => (
+                                        <div key={insight} className="insight-card">{insight}</div>
+                                      ))}
+                                    </div>
+                                  )}
+
+                                  <button
+                                    className="btn btn-small btn-ghost"
+                                    onClick={() => handleDownloadReport(ds.id, ds.original_filename)}
+                                  >
+                                    Download report
+                                  </button>
+
                                   <div className="analysis-grid">
                                     <div>
                                       <h3>Correlation heatmap</h3>
@@ -786,6 +909,23 @@ export default function Projects() {
                                         ))}
                                       </select>
                                     </label>
+                                    {(analysis.categoricalColumns ?? []).length > 0 && (
+                                      <label className="field compact-field">
+                                        <span>Color by</span>
+                                        <select
+                                          value={analysisColorBy}
+                                          onChange={(e) => {
+                                            setAnalysisColorBy(e.target.value);
+                                            setSelectedAnalysisPoint(null);
+                                          }}
+                                        >
+                                          <option value="row">Row order</option>
+                                          {analysis.categoricalColumns.map((col) => (
+                                            <option key={col} value={col}>{col}</option>
+                                          ))}
+                                        </select>
+                                      </label>
+                                    )}
                                   </div>
 
                                   <div className="analysis-grid">
@@ -798,6 +938,26 @@ export default function Projects() {
                                       <div ref={scatterRef} className="analysis-plot" />
                                     </div>
                                   </div>
+
+                                  {selectedAnalysisPoint && (
+                                    <div className="inspector-panel">
+                                      <h3>Selected row {selectedAnalysisPoint.metadata?.rowNumber ?? selectedAnalysisPoint.rowNumber}</h3>
+                                      <div className="inspector-grid">
+                                        {Object.entries(selectedAnalysisPoint.metadata?.labels ?? {}).map(([key, value]) => (
+                                          <div key={key}>
+                                            <span className="meta-label">{key}</span>
+                                            <strong>{value || "n/a"}</strong>
+                                          </div>
+                                        ))}
+                                        {analysis.columnNames.map((col, index) => (
+                                          <div key={col}>
+                                            <span className="meta-label">{col}</span>
+                                            <strong>{formatNumber(selectedAnalysisPoint.values[index])}</strong>
+                                          </div>
+                                        ))}
+                                      </div>
+                                    </div>
+                                  )}
 
                                   <div className="dataset-table-wrap">
                                     <table className="dataset-table quality-table">

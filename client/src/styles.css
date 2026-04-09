@@ -246,6 +246,12 @@ h3 { font-size: 1.1rem; margin-bottom: 0.75rem; }
   font-size: 0.9rem;
 }
 
+.sample-list {
+  display: grid;
+  gap: 0.6rem;
+  margin-top: 1rem;
+}
+
 /* ── Dataset table ─────────────────────────────────────────────────────────── */
 
 .dataset-table-wrap { overflow-x: auto; }
@@ -471,6 +477,21 @@ h3 { font-size: 1.1rem; margin-bottom: 0.75rem; }
 
 .quality-table { min-width: 680px; }
 
+.insight-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(190px, 1fr));
+  gap: 0.75rem;
+}
+
+.insight-card {
+  padding: 0.85rem;
+  border-left: 4px solid var(--green-mid);
+  border-radius: 8px;
+  background: rgba(230, 244, 234, 0.75);
+  font-size: 0.9rem;
+  line-height: 1.45;
+}
+
 .analysis-panel { gap: 1.25rem; }
 
 .analysis-grid {
@@ -518,6 +539,27 @@ h3 { font-size: 1.1rem; margin-bottom: 0.75rem; }
 .loading-card p {
   margin: 0.25rem 0;
   font-size: 0.88rem;
+}
+
+.inspector-panel {
+  display: grid;
+  gap: 0.75rem;
+  margin-top: 1rem;
+  padding: 1rem;
+  border: 1px solid #d0dbc8;
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.58);
+}
+
+.inspector-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(135px, 1fr));
+  gap: 0.75rem;
+}
+
+.inspector-grid > div {
+  display: grid;
+  gap: 0.2rem;
 }
 
 /* ── Inline edit ───────────────────────────────────────────────────────────── */

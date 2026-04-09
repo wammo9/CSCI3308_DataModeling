@@ -25,9 +25,11 @@ CREATE TABLE datasets (
     row_count             INTEGER,
     column_count          INTEGER,
     quantitative_columns  TEXT[],
+    categorical_columns   TEXT[],
     all_columns           TEXT[],
     raw_data              JSONB,
     preview_data          JSONB,
+    row_metadata          JSONB,
     quality_report        JSONB,
     upload_timestamp      TIMESTAMPTZ  DEFAULT NOW()
 );

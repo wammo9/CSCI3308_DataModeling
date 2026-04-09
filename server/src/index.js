@@ -13,16 +13,20 @@
  * POST /api/login                    authenticate (returns JWT)
  *
  * GET    /api/datasets               list user's datasets       [auth]
+ * GET    /api/samples                list sample datasets       [auth]
+ * POST   /api/samples/:id            add a sample dataset       [auth]
  * POST   /api/datasets/upload        upload + parse a CSV       [auth]
  * GET    /api/datasets/:id/preview   first 10 rows of dataset   [auth]
  * PATCH  /api/datasets/:id           rename / add notes         [auth]
  * GET    /api/datasets/:id/quality   dataset quality report     [auth]
  * GET    /api/datasets/:id/analysis  numeric analysis data      [auth]
+ * GET    /api/datasets/:id/report    download analysis report   [auth]
  * DELETE /api/datasets/:id           delete dataset + PCA runs  [auth]
  * POST   /api/datasets/:id/pca      run PCA on a dataset       [auth]
  * GET    /api/datasets/:id/pca      list PCA runs for dataset   [auth]
  * GET    /api/pca/:id               fetch a single PCA result   [auth]
  * GET    /api/pca/:id/clusters      k-means clusters for run    [auth]
+ * GET    /api/pca/:id/report        download PCA report         [auth]
  * GET    /api/pca/:id/export        download transformed CSV    [auth]
  * DELETE /api/pca/:id               delete a PCA run            [auth]
  */
@@ -82,6 +86,8 @@ async function resolveUserId(req) {
 
 async function ensureSchema() {
   await pool.query('ALTER TABLE datasets ADD COLUMN IF NOT EXISTS quality_report JSONB');
+  await pool.query('ALTER TABLE datasets ADD COLUMN IF NOT EXISTS categorical_columns TEXT[]');
+  await pool.query('ALTER TABLE datasets ADD COLUMN IF NOT EXISTS row_metadata JSONB');
   await pool.query('ALTER TABLE pca_runs ADD COLUMN IF NOT EXISTS loadings JSONB');
 }
 
@@ -165,6 +171,209 @@ function buildQualityReport(records, allColumns, quantitativeColumns, cleanRows)
   };
 }
 
+function detectCategoricalColumns(records, allColumns, quantitativeColumns) {
+  return allColumns.filter((col) => {
+    if (quantitativeColumns.includes(col)) return false;
+    const values = records
+      .map((row) => row[col])
+      .filter((value) => value !== '' && value != null)
+      .map(String);
+    const unique = new Set(values);
+    return values.length > 0 && unique.size <= Math.min(50, Math.max(8, records.length * 0.6));
+  });
+}
+
+function buildRowMetadata(cleanRowsWithIndex, allColumns, quantitativeColumns, categoricalColumns) {
+  return cleanRowsWithIndex.map(({ row, index }) => {
+    const labels = {};
+    for (const col of categoricalColumns) labels[col] = row[col] ?? '';
+    const values = {};
+    for (const col of allColumns) values[col] = row[col] ?? '';
+    return {
+      rowNumber: index + 1,
+      labels,
+      values,
+      numeric: Object.fromEntries(quantitativeColumns.map((col) => [col, Number(row[col])])),
+    };
+  });
+}
+
+function buildDatasetInsights(qualityReport, analysis) {
+  const insights = [];
+  const dropped = qualityReport.rows?.droppedForPca ?? 0;
+  if (dropped > 0) {
+    insights.push(`${dropped} row${dropped === 1 ? '' : 's'} were excluded before analysis because numeric values were missing.`);
+  } else {
+    insights.push('Every row with numeric data was usable for PCA.');
+  }
+
+  const strongest = analysis.strongestCorrelations?.[0];
+  if (strongest && strongest.r !== null && Math.abs(strongest.r) >= 0.7) {
+    const direction = strongest.r > 0 ? 'positive' : 'negative';
+    insights.push(`${strongest.x} and ${strongest.y} have a strong ${direction} correlation (${strongest.r.toFixed(2)}).`);
+  }
+
+  const variableColumns = [...(analysis.columnStats ?? [])]
+    .filter((col) => Number.isFinite(col.stdDev))
+    .sort((a, b) => b.stdDev - a.stdDev);
+  if (variableColumns[0]) {
+    insights.push(`${variableColumns[0].name} has the largest spread among numeric features.`);
+  }
+
+  const constantColumn = qualityReport.numericColumns?.find((col) => col.isConstant);
+  if (constantColumn) {
+    insights.push(`${constantColumn.name} is constant and may not add useful signal to PCA.`);
+  }
+
+  return insights;
+}
+
+function buildDatasetFromRecords(records, filename) {
+  if (!records.length) {
+    throw new Error('CSV file is empty');
+  }
+
+  const allColumns = Object.keys(records[0]);
+  const quantColumns = allColumns.filter((col) => {
+    const values = records
+      .map((r) => r[col])
+      .filter((v) => v !== '' && v != null);
+    return values.length > 0 && values.every((v) => isNumericValue(v));
+  });
+
+  if (quantColumns.length < 2) {
+    throw new Error(`Need at least 2 numeric columns. Found: ${quantColumns.join(', ') || 'none'}.`);
+  }
+
+  const cleanRowsWithIndex = records
+    .map((row, index) => ({ row, index }))
+    .filter(({ row }) => quantColumns.every((col) => isNumericValue(row[col])));
+  const clean = cleanRowsWithIndex.map(({ row }) => row);
+
+  if (clean.length < 2) {
+    throw new Error('Not enough valid rows after removing rows with missing values.');
+  }
+
+  const categoricalColumns = detectCategoricalColumns(records, allColumns, quantColumns);
+  const matrix = clean.map((row) => quantColumns.map((col) => Number(row[col])));
+  const preview = records.slice(0, 10).map((row) => {
+    const obj = {};
+    for (const col of allColumns) obj[col] = row[col];
+    return obj;
+  });
+  const rowMetadata = buildRowMetadata(cleanRowsWithIndex, allColumns, quantColumns, categoricalColumns);
+  const qualityReport = buildQualityReport(records, allColumns, quantColumns, clean);
+
+  return {
+    filename,
+    allColumns,
+    quantColumns,
+    categoricalColumns,
+    matrix,
+    preview,
+    rowMetadata,
+    qualityReport,
+    rowCount: clean.length,
+    columnCount: allColumns.length,
+  };
+}
+
+async function saveDataset(uid, dataset, name, notes = '') {
+  const result = await pool.query(
+    `INSERT INTO datasets
+       (user_id, original_filename, name, notes, row_count, column_count,
+        quantitative_columns, categorical_columns, all_columns, raw_data,
+        preview_data, row_metadata, quality_report)
+     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)
+     RETURNING id`,
+    [
+      uid,
+      dataset.filename,
+      name,
+      notes,
+      dataset.rowCount,
+      dataset.columnCount,
+      dataset.quantColumns,
+      dataset.categoricalColumns,
+      dataset.allColumns,
+      JSON.stringify(dataset.matrix),
+      JSON.stringify(dataset.preview),
+      JSON.stringify(dataset.rowMetadata),
+      JSON.stringify(dataset.qualityReport),
+    ]
+  );
+
+  return {
+    status: 'success',
+    datasetId: result.rows[0].id,
+    filename: dataset.filename,
+    rowCount: dataset.rowCount,
+    columnCount: dataset.columnCount,
+    quantitativeColumns: dataset.quantColumns,
+    categoricalColumns: dataset.categoricalColumns,
+    qualityReport: dataset.qualityReport,
+  };
+}
+
+const SAMPLE_DATASETS = {
+  iris: {
+    id: 'iris',
+    name: 'Iris flower measurements',
+    filename: 'iris_sample.csv',
+    notes: 'Built-in sample with flower measurements and species labels.',
+    records: [
+      { species: 'setosa', sepal_length: '5.1', sepal_width: '3.5', petal_length: '1.4', petal_width: '0.2' },
+      { species: 'setosa', sepal_length: '4.9', sepal_width: '3.0', petal_length: '1.4', petal_width: '0.2' },
+      { species: 'setosa', sepal_length: '5.0', sepal_width: '3.6', petal_length: '1.4', petal_width: '0.2' },
+      { species: 'setosa', sepal_length: '5.4', sepal_width: '3.9', petal_length: '1.7', petal_width: '0.4' },
+      { species: 'versicolor', sepal_length: '6.4', sepal_width: '3.2', petal_length: '4.5', petal_width: '1.5' },
+      { species: 'versicolor', sepal_length: '6.9', sepal_width: '3.1', petal_length: '4.9', petal_width: '1.5' },
+      { species: 'versicolor', sepal_length: '5.5', sepal_width: '2.3', petal_length: '4.0', petal_width: '1.3' },
+      { species: 'versicolor', sepal_length: '6.5', sepal_width: '2.8', petal_length: '4.6', petal_width: '1.5' },
+      { species: 'virginica', sepal_length: '6.5', sepal_width: '3.0', petal_length: '5.8', petal_width: '2.2' },
+      { species: 'virginica', sepal_length: '7.6', sepal_width: '3.0', petal_length: '6.6', petal_width: '2.1' },
+      { species: 'virginica', sepal_length: '7.3', sepal_width: '2.9', petal_length: '6.3', petal_width: '1.8' },
+      { species: 'virginica', sepal_length: '6.7', sepal_width: '3.3', petal_length: '5.7', petal_width: '2.5' },
+    ],
+  },
+  students: {
+    id: 'students',
+    name: 'Student performance',
+    filename: 'student_performance_sample.csv',
+    notes: 'Built-in sample with study habits, attendance, and exam scores.',
+    records: [
+      { track: 'analytics', study_hours: '12', attendance_rate: '0.96', sleep_hours: '7.5', practice_quizzes: '8', final_score: '91' },
+      { track: 'analytics', study_hours: '10', attendance_rate: '0.91', sleep_hours: '6.8', practice_quizzes: '7', final_score: '84' },
+      { track: 'systems', study_hours: '7', attendance_rate: '0.82', sleep_hours: '6.1', practice_quizzes: '4', final_score: '72' },
+      { track: 'systems', study_hours: '5', attendance_rate: '0.76', sleep_hours: '5.8', practice_quizzes: '3', final_score: '65' },
+      { track: 'design', study_hours: '9', attendance_rate: '0.88', sleep_hours: '7.1', practice_quizzes: '6', final_score: '80' },
+      { track: 'design', study_hours: '11', attendance_rate: '0.94', sleep_hours: '7.0', practice_quizzes: '7', final_score: '88' },
+      { track: 'analytics', study_hours: '14', attendance_rate: '0.98', sleep_hours: '7.2', practice_quizzes: '9', final_score: '95' },
+      { track: 'systems', study_hours: '6', attendance_rate: '0.79', sleep_hours: '6.4', practice_quizzes: '4', final_score: '70' },
+      { track: 'design', study_hours: '8', attendance_rate: '0.85', sleep_hours: '6.9', practice_quizzes: '5', final_score: '77' },
+      { track: 'analytics', study_hours: '13', attendance_rate: '0.97', sleep_hours: '7.8', practice_quizzes: '8', final_score: '93' },
+    ],
+  },
+  cars: {
+    id: 'cars',
+    name: 'Vehicle attributes',
+    filename: 'vehicle_attributes_sample.csv',
+    notes: 'Built-in sample with vehicle measurements and body style labels.',
+    records: [
+      { body_style: 'compact', mpg: '34', horsepower: '130', weight: '2600', acceleration: '8.9', price: '24000' },
+      { body_style: 'compact', mpg: '31', horsepower: '145', weight: '2850', acceleration: '8.4', price: '26500' },
+      { body_style: 'sedan', mpg: '28', horsepower: '175', weight: '3300', acceleration: '7.7', price: '33000' },
+      { body_style: 'sedan', mpg: '25', horsepower: '205', weight: '3650', acceleration: '7.1', price: '39000' },
+      { body_style: 'suv', mpg: '22', horsepower: '240', weight: '4300', acceleration: '7.3', price: '46000' },
+      { body_style: 'suv', mpg: '19', horsepower: '285', weight: '4850', acceleration: '6.8', price: '54000' },
+      { body_style: 'truck', mpg: '18', horsepower: '310', weight: '5200', acceleration: '6.9', price: '51000' },
+      { body_style: 'truck', mpg: '16', horsepower: '365', weight: '5750', acceleration: '6.4', price: '62000' },
+      { body_style: 'sport', mpg: '21', horsepower: '390', weight: '3600', acceleration: '4.4', price: '72000' },
+      { body_style: 'sport', mpg: '19', horsepower: '455', weight: '3850', acceleration: '4.0', price: '88000' },
+    ],
+  },
+};
+
 function quantile(sortedValues, q) {
   if (!sortedValues.length) return null;
   const pos = (sortedValues.length - 1) * q;
@@ -222,6 +431,8 @@ function pearson(xValues, yValues) {
 function buildDatasetAnalysis(ds) {
   const matrix = ds.raw_data ?? [];
   const columnNames = ds.quantitative_columns ?? [];
+  const categoricalColumns = ds.categorical_columns ?? [];
+  const rowMetadata = ds.row_metadata ?? [];
   const statsWithValues = columnNames.map((name, i) => summarizeMatrixColumn(matrix, i, name));
   const columnStats = statsWithValues.map(({ values: _values, ...summary }) => summary);
   const correlationMatrix = statsWithValues.map((xCol) =>
@@ -246,12 +457,14 @@ function buildDatasetAnalysis(ds) {
   const maxRows = 5000;
   const step = matrix.length > maxRows ? Math.ceil(matrix.length / maxRows) : 1;
   const rows = matrix
-    .filter((_, index) => index % step === 0)
+    .map((row, index) => ({ row, index }))
+    .filter(({ index }) => index % step === 0)
     .slice(0, maxRows)
-    .map((row, index) => ({ rowNumber: index * step + 1, values: row }));
+    .map(({ row, index }) => ({ rowNumber: index + 1, values: row, metadata: rowMetadata[index] ?? null }));
 
-  return {
+  const analysis = {
     columnNames,
+    categoricalColumns,
     columnStats,
     correlationMatrix,
     strongestCorrelations,
@@ -259,6 +472,11 @@ function buildDatasetAnalysis(ds) {
     rowCount: matrix.length,
     sampledRowCount: rows.length,
   };
+  analysis.insights = buildDatasetInsights(ds.quality_report ?? {
+    rows: { total: matrix.length, usableForPca: matrix.length, droppedForPca: 0 },
+    numericColumns: [],
+  }, analysis);
+  return analysis;
 }
 
 function squaredDistance(a, b) {
@@ -315,6 +533,110 @@ function runKMeans(points, requestedK) {
     centroids,
     counts: centroids.map((_, i) => labels.filter((label) => label === i).length),
   };
+}
+
+function escapeHtml(value) {
+  return String(value ?? '')
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#39;');
+}
+
+function formatPct(value) {
+  return `${(Number(value || 0) * 100).toFixed(1)}%`;
+}
+
+function sendHtmlReport(res, filename, html) {
+  res.setHeader('Content-Type', 'text/html; charset=utf-8');
+  res.setHeader('Content-Disposition', `attachment; filename="${filename}"`);
+  return res.send(html);
+}
+
+function datasetReportHtml(ds, analysis) {
+  const statsRows = (analysis.columnStats ?? []).map((col) => `
+    <tr>
+      <td>${escapeHtml(col.name)}</td>
+      <td>${Number(col.mean).toFixed(3)}</td>
+      <td>${Number(col.median).toFixed(3)}</td>
+      <td>${Number(col.stdDev).toFixed(3)}</td>
+      <td>${Number(col.min).toFixed(3)}</td>
+      <td>${Number(col.max).toFixed(3)}</td>
+    </tr>`).join('');
+  const insightItems = (analysis.insights ?? []).map((item) => `<li>${escapeHtml(item)}</li>`).join('');
+  const relationshipItems = (analysis.strongestCorrelations ?? []).map((item) =>
+    `<li>${escapeHtml(item.x)} and ${escapeHtml(item.y)}: ${Number(item.r).toFixed(3)}</li>`
+  ).join('');
+
+  return `<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8" />
+  <title>${escapeHtml(ds.name || ds.original_filename)} analysis report</title>
+  <style>
+    body { font-family: Arial, sans-serif; margin: 2rem; color: #122620; line-height: 1.5; }
+    table { border-collapse: collapse; width: 100%; margin-top: 1rem; }
+    th, td { border: 1px solid #c8d5c0; padding: 0.45rem 0.6rem; text-align: left; }
+    th { background: #e6f4ea; }
+    .muted { color: #6b705c; }
+  </style>
+</head>
+<body>
+  <h1>${escapeHtml(ds.name || ds.original_filename)}</h1>
+  <p class="muted">${escapeHtml(ds.original_filename)} · ${ds.row_count} usable rows · ${(ds.quantitative_columns ?? []).length} numeric columns</p>
+  <h2>Insights</h2>
+  <ul>${insightItems}</ul>
+  <h2>Strongest Relationships</h2>
+  <ul>${relationshipItems || '<li>No strong relationships found.</li>'}</ul>
+  <h2>Summary Statistics</h2>
+  <table>
+    <thead><tr><th>Column</th><th>Mean</th><th>Median</th><th>Std dev</th><th>Min</th><th>Max</th></tr></thead>
+    <tbody>${statsRows}</tbody>
+  </table>
+</body>
+</html>`;
+}
+
+function pcaReportHtml(run) {
+  const total = (run.explained_variance_ratio ?? []).reduce((sum, value) => sum + Number(value || 0), 0);
+  const varianceRows = (run.explained_variance_ratio ?? []).map((value, index) =>
+    `<tr><td>PC${index + 1}</td><td>${formatPct(value)}</td></tr>`
+  ).join('');
+  const loadingRows = (run.loadings ?? []).map((component, componentIndex) => {
+    const contributors = component
+      .map((value, index) => ({ name: run.column_names[index], value }))
+      .sort((a, b) => Math.abs(b.value) - Math.abs(a.value))
+      .slice(0, 5)
+      .map((item) => `${escapeHtml(item.name)} (${Number(item.value).toFixed(3)})`)
+      .join(', ');
+    return `<tr><td>PC${componentIndex + 1}</td><td>${contributors}</td></tr>`;
+  }).join('');
+
+  return `<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8" />
+  <title>${escapeHtml(run.original_filename)} PCA report</title>
+  <style>
+    body { font-family: Arial, sans-serif; margin: 2rem; color: #122620; line-height: 1.5; }
+    table { border-collapse: collapse; width: 100%; margin-top: 1rem; }
+    th, td { border: 1px solid #c8d5c0; padding: 0.45rem 0.6rem; text-align: left; }
+    th { background: #e6f4ea; }
+    .muted { color: #6b705c; }
+  </style>
+</head>
+<body>
+  <h1>${escapeHtml(run.original_filename)} PCA report</h1>
+  <p class="muted">${run.n_samples} samples · ${run.n_components} components · ${formatPct(total)} total variance explained</p>
+  <h2>Input Features</h2>
+  <p>${(run.column_names ?? []).map(escapeHtml).join(', ')}</p>
+  <h2>Variance Explained</h2>
+  <table><thead><tr><th>Component</th><th>Variance</th></tr></thead><tbody>${varianceRows}</tbody></table>
+  <h2>Top Loadings</h2>
+  <table><thead><tr><th>Component</th><th>Top contributors</th></tr></thead><tbody>${loadingRows}</tbody></table>
+</body>
+</html>`;
 }
 
 // ── Backward-compat stubs (keep existing tests passing) ──────────────────────
@@ -419,7 +741,7 @@ app.get('/api/datasets', requireAuth, async (req, res) => {
     const uid = await resolveUserId(req);
     const result = await pool.query(
       `SELECT id, original_filename, name, notes, row_count, column_count,
-              quantitative_columns, all_columns, upload_timestamp
+              quantitative_columns, categorical_columns, all_columns, upload_timestamp
        FROM datasets
        WHERE user_id = $1
        ORDER BY upload_timestamp DESC`,
@@ -429,6 +751,34 @@ app.get('/api/datasets', requireAuth, async (req, res) => {
   } catch (err) {
     console.error('List datasets error:', err);
     return res.status(500).json({ status: 'error', message: 'Server error' });
+  }
+});
+
+app.get('/api/samples', requireAuth, (_req, res) => {
+  const samples = Object.values(SAMPLE_DATASETS).map((sample) => ({
+    id: sample.id,
+    name: sample.name,
+    filename: sample.filename,
+    rowCount: sample.records.length,
+    columns: Object.keys(sample.records[0] ?? {}),
+  }));
+  return res.json({ status: 'success', samples });
+});
+
+app.post('/api/samples/:id', requireAuth, async (req, res) => {
+  const sample = SAMPLE_DATASETS[req.params.id];
+  if (!sample) {
+    return res.status(404).json({ status: 'error', message: 'Sample dataset not found' });
+  }
+
+  try {
+    const uid = await resolveUserId(req);
+    const dataset = buildDatasetFromRecords(sample.records, sample.filename);
+    const response = await saveDataset(uid, dataset, sample.name, sample.notes);
+    return res.json(response);
+  } catch (err) {
+    console.error('Create sample dataset error:', err);
+    return res.status(500).json({ status: 'error', message: 'Could not create sample dataset' });
   }
 });
 
@@ -450,79 +800,21 @@ app.post('/api/datasets/upload', requireAuth, upload.single('file'), async (req,
     return res.status(400).json({ status: 'error', message: 'Could not parse CSV: ' + err.message });
   }
 
-  if (!records.length) {
-    return res.status(400).json({ status: 'error', message: 'CSV file is empty' });
+  let dataset;
+  try {
+    dataset = buildDatasetFromRecords(records, req.file.originalname);
+  } catch (err) {
+    return res.status(400).json({ status: 'error', message: err.message });
   }
-
-  // Detect quantitative columns (every non-empty value parses as a finite number)
-  const allColumns = Object.keys(records[0]);
-  const quantColumns = allColumns.filter((col) => {
-    const values = records
-      .map((r) => r[col])
-      .filter((v) => v !== '' && v != null);
-    return values.length > 0 && values.every((v) => isNumericValue(v));
-  });
-
-  if (quantColumns.length < 2) {
-    return res.status(400).json({
-      status: 'error',
-      message: `Need at least 2 numeric columns. Found: ${quantColumns.join(', ') || 'none'}.`,
-    });
-  }
-
-  // Drop rows that have a missing or non-numeric value in any quant column
-  const clean = records.filter((row) =>
-    quantColumns.every((col) => isNumericValue(row[col]))
-  );
-
-  if (clean.length < 2) {
-    return res.status(400).json({
-      status: 'error',
-      message: 'Not enough valid rows after removing rows with missing values.',
-    });
-  }
-
-  // Build numeric matrix
-  const matrix = clean.map((row) => quantColumns.map((col) => Number(row[col])));
-
-  // Build preview: first 10 rows with ALL columns (for dataset preview feature)
-  const preview = records.slice(0, 10).map((row) => {
-    const obj = {};
-    for (const col of allColumns) obj[col] = row[col];
-    return obj;
-  });
-  const qualityReport = buildQualityReport(records, allColumns, quantColumns, clean);
 
   try {
     const uid = await resolveUserId(req);
-    const result = await pool.query(
-      `INSERT INTO datasets
-         (user_id, original_filename, name, row_count, column_count,
-          quantitative_columns, all_columns, raw_data, preview_data, quality_report)
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
-       RETURNING id`,
-      [
-        uid,
-        req.file.originalname,
-        req.file.originalname.replace(/\.csv$/i, ''),
-        clean.length,
-        allColumns.length,
-        quantColumns,
-        allColumns,
-        JSON.stringify(matrix),
-        JSON.stringify(preview),
-        JSON.stringify(qualityReport),
-      ]
+    const response = await saveDataset(
+      uid,
+      dataset,
+      req.file.originalname.replace(/\.csv$/i, ''),
     );
-    return res.json({
-      status: 'success',
-      datasetId: result.rows[0].id,
-      filename: req.file.originalname,
-      rowCount: clean.length,
-      columnCount: allColumns.length,
-      quantitativeColumns: quantColumns,
-      qualityReport,
-    });
+    return res.json(response);
   } catch (err) {
     console.error('Upload error:', err);
     return res.status(500).json({ status: 'error', message: 'Failed to save dataset' });
@@ -540,7 +832,7 @@ app.get('/api/datasets/:id/preview', requireAuth, async (req, res) => {
   try {
     const uid = await resolveUserId(req);
     const result = await pool.query(
-      `SELECT preview_data, all_columns, quantitative_columns, original_filename, row_count
+      `SELECT preview_data, all_columns, quantitative_columns, categorical_columns, original_filename, row_count
        FROM datasets WHERE id = $1 AND user_id = $2`,
       [datasetId, uid]
     );
@@ -554,6 +846,7 @@ app.get('/api/datasets/:id/preview', requireAuth, async (req, res) => {
       totalRows: ds.row_count,
       columns: ds.all_columns,
       quantitativeColumns: ds.quantitative_columns,
+      categoricalColumns: ds.categorical_columns ?? [],
       preview: ds.preview_data ?? [],
     });
   } catch (err) {
@@ -611,7 +904,7 @@ app.get('/api/datasets/:id/analysis', requireAuth, async (req, res) => {
   try {
     const uid = await resolveUserId(req);
     const result = await pool.query(
-      `SELECT raw_data, quantitative_columns, row_count
+      `SELECT raw_data, quantitative_columns, categorical_columns, row_metadata, quality_report, row_count
        FROM datasets WHERE id = $1 AND user_id = $2`,
       [datasetId, uid]
     );
@@ -625,6 +918,33 @@ app.get('/api/datasets/:id/analysis', requireAuth, async (req, res) => {
     });
   } catch (err) {
     console.error('Dataset analysis error:', err);
+    return res.status(500).json({ status: 'error', message: 'Server error' });
+  }
+});
+
+app.get('/api/datasets/:id/report', requireAuth, async (req, res) => {
+  const datasetId = parseInt(req.params.id, 10);
+  if (isNaN(datasetId)) {
+    return res.status(400).json({ status: 'error', message: 'Invalid dataset id' });
+  }
+
+  try {
+    const uid = await resolveUserId(req);
+    const result = await pool.query(
+      `SELECT original_filename, name, notes, row_count, quantitative_columns,
+              categorical_columns, raw_data, row_metadata, quality_report
+       FROM datasets WHERE id = $1 AND user_id = $2`,
+      [datasetId, uid]
+    );
+    if (!result.rows.length) {
+      return res.status(404).json({ status: 'error', message: 'Dataset not found' });
+    }
+    const ds = result.rows[0];
+    const analysis = buildDatasetAnalysis(ds);
+    const reportName = `${(ds.name || ds.original_filename).replace(/[^a-z0-9_-]+/gi, '_')}_report.html`;
+    return sendHtmlReport(res, reportName, datasetReportHtml(ds, analysis));
+  } catch (err) {
+    console.error('Dataset report error:', err);
     return res.status(500).json({ status: 'error', message: 'Server error' });
   }
 });
@@ -860,7 +1180,7 @@ app.get('/api/pca/:id', requireAuth, async (req, res) => {
   try {
     const uid = await resolveUserId(req);
     const result = await pool.query(
-      `SELECT r.*, d.original_filename
+      `SELECT r.*, d.original_filename, d.row_metadata, d.categorical_columns
        FROM pca_runs r
        JOIN datasets d ON d.id = r.dataset_id
        WHERE r.id = $1 AND d.user_id = $2`,
@@ -880,6 +1200,8 @@ app.get('/api/pca/:id', requireAuth, async (req, res) => {
       loadings: run.loadings ?? [],
       transformedData: run.transformed_data,
       columnNames: run.column_names,
+      rowMetadata: run.row_metadata ?? [],
+      labelColumns: run.categorical_columns ?? [],
       nSamples: run.n_samples,
       createdAt: run.created_at,
     });
@@ -912,6 +1234,33 @@ app.get('/api/pca/:id/clusters', requireAuth, async (req, res) => {
     return res.json({ status: 'success', clusters });
   } catch (err) {
     console.error('Cluster PCA run error:', err);
+    return res.status(500).json({ status: 'error', message: 'Server error' });
+  }
+});
+
+app.get('/api/pca/:id/report', requireAuth, async (req, res) => {
+  const runId = parseInt(req.params.id, 10);
+  if (isNaN(runId)) {
+    return res.status(400).json({ status: 'error', message: 'Invalid run id' });
+  }
+
+  try {
+    const uid = await resolveUserId(req);
+    const result = await pool.query(
+      `SELECT r.*, d.original_filename
+       FROM pca_runs r
+       JOIN datasets d ON d.id = r.dataset_id
+       WHERE r.id = $1 AND d.user_id = $2`,
+      [runId, uid]
+    );
+    if (!result.rows.length) {
+      return res.status(404).json({ status: 'error', message: 'PCA run not found' });
+    }
+    const run = result.rows[0];
+    const reportName = `${run.original_filename.replace(/\.csv$/i, '').replace(/[^a-z0-9_-]+/gi, '_')}_pca_report.html`;
+    return sendHtmlReport(res, reportName, pcaReportHtml(run));
+  } catch (err) {
+    console.error('PCA report error:', err);
     return res.status(500).json({ status: 'error', message: 'Server error' });
   }
 });
