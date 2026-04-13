@@ -478,6 +478,27 @@ export default function Projects() {
     }
   }
 
+  async function handleDownloadProjectReport(datasetId, filename) {
+    try {
+      const res = await fetch(`${apiBase}/api/datasets/${datasetId}/project-report`, {
+        headers: authHeaders(),
+      });
+      if (!res.ok) {
+        alert("Could not create project report.");
+        return;
+      }
+      const blob = await res.blob();
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = `${filename.replace(/\.csv$/i, "")}_project_report.html`;
+      a.click();
+      URL.revokeObjectURL(url);
+    } catch {
+      alert("Could not reach the server.");
+    }
+  }
+
   // ── Feature 2: Delete ──
 
   async function handleDelete(datasetId, filename) {
@@ -671,6 +692,12 @@ export default function Projects() {
                               onClick={() => handleAnalysis(ds.id)}
                             >
                               {hasAnalysis ? "Hide analysis" : analysisLoadingId === ds.id ? "Loading…" : "Analysis"}
+                            </button>
+                            <button
+                              className="btn btn-small btn-ghost"
+                              onClick={() => handleDownloadProjectReport(ds.id, ds.original_filename)}
+                            >
+                              Generate report
                             </button>
                             <button className="btn btn-small btn-ghost" onClick={() => startEditing(ds)}>
                               Edit

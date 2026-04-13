@@ -38,7 +38,7 @@ function Navbar() {
 
   return (
     <nav className="navbar">
-      <NavLink to="/" className="navbar-brand">
+      <NavLink to={loggedIn ? "/projects" : "/"} className="navbar-brand">
         ModelScope
       </NavLink>
       <div className="navbar-links">

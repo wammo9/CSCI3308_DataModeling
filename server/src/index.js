@@ -900,6 +900,176 @@ function pcaReportHtml(run) {
 </html>`;
 }
 
+function scalePoint(value, min, max, size, padding) {
+  if (!Number.isFinite(value) || max === min) return size / 2;
+  return padding + ((value - min) / (max - min)) * (size - padding * 2);
+}
+
+function pcaScatterSvg(run, clusters = null) {
+  const points = run.transformed_data ?? [];
+  if (!points.length || !points[0] || points[0].length < 2) {
+    return '<p class="muted">No PCA coordinates available for this run.</p>';
+  }
+
+  const width = 480;
+  const height = 300;
+  const padding = 34;
+  const xValues = points.map((point) => Number(point[0]));
+  const yValues = points.map((point) => Number(point[1]));
+  const minX = Math.min(...xValues);
+  const maxX = Math.max(...xValues);
+  const minY = Math.min(...yValues);
+  const maxY = Math.max(...yValues);
+  const colors = ['#122620', '#b57a2e', '#2d4a3e', '#8a4f2d', '#5b7f95', '#7a6f2a'];
+
+  const circles = points.slice(0, 650).map((point, index) => {
+    const x = scalePoint(Number(point[0]), minX, maxX, width, padding);
+    const y = height - scalePoint(Number(point[1]), minY, maxY, height, padding);
+    const label = clusters?.labels?.[index] ?? index;
+    const color = clusters ? colors[label % colors.length] : '#2d4a3e';
+    return `<circle cx="${x.toFixed(1)}" cy="${y.toFixed(1)}" r="4" fill="${color}" opacity="0.78"><title>Row ${index + 1}: PC1 ${Number(point[0]).toFixed(3)}, PC2 ${Number(point[1]).toFixed(3)}</title></circle>`;
+  }).join('');
+
+  return `
+    <svg viewBox="0 0 ${width} ${height}" role="img" aria-label="PCA scatter plot">
+      <rect x="0" y="0" width="${width}" height="${height}" rx="14" fill="#f8fbf4" />
+      <line x1="${padding}" y1="${height - padding}" x2="${width - padding}" y2="${height - padding}" stroke="#6b705c" />
+      <line x1="${padding}" y1="${padding}" x2="${padding}" y2="${height - padding}" stroke="#6b705c" />
+      <text x="${width / 2}" y="${height - 8}" text-anchor="middle" font-size="12" fill="#6b705c">PC1</text>
+      <text x="14" y="${height / 2}" text-anchor="middle" font-size="12" fill="#6b705c" transform="rotate(-90 14 ${height / 2})">PC2</text>
+      ${circles}
+    </svg>`;
+}
+
+function projectReportHtml(ds, analysis, runs) {
+  const quality = ds.quality_report ?? {};
+  const warnings = (quality.warnings ?? []).map((warning) => `<li>${escapeHtml(warning)}</li>`).join('');
+  const insights = (analysis.insights ?? []).map((insight) => `<li>${escapeHtml(insight)}</li>`).join('');
+  const relationships = (analysis.strongestCorrelations ?? []).slice(0, 6).map((item) =>
+    `<li>${escapeHtml(item.x)} and ${escapeHtml(item.y)}: ${Number(item.r).toFixed(3)}</li>`
+  ).join('');
+  const statsRows = (analysis.columnStats ?? []).map((col) => `
+    <tr>
+      <td>${escapeHtml(col.name)}</td>
+      <td>${Number(col.mean).toFixed(3)}</td>
+      <td>${Number(col.median).toFixed(3)}</td>
+      <td>${Number(col.stdDev).toFixed(3)}</td>
+      <td>${Number(col.min).toFixed(3)}</td>
+      <td>${Number(col.max).toFixed(3)}</td>
+    </tr>`).join('');
+
+  const runSections = runs.map((run, index) => {
+    let clusters = null;
+    try {
+      clusters = runKMeans(run.transformed_data ?? [], Math.min(3, run.transformed_data?.length ?? 0));
+    } catch {
+      clusters = null;
+    }
+
+    const varianceRows = (run.explained_variance_ratio ?? []).map((value, componentIndex) =>
+      `<tr><td>PC${componentIndex + 1}</td><td>${formatPct(value)}</td></tr>`
+    ).join('');
+    const preprocessing = run.preprocessing_report ?? {};
+    const clusterSummary = clusters
+      ? clusters.counts.map((count, clusterIndex) => `<li>Cluster ${clusterIndex}: ${count} point${count === 1 ? '' : 's'}</li>`).join('')
+      : '<li>No cluster summary available.</li>';
+    const featureTags = (run.column_names ?? []).map((col) => `<span class="tag">${escapeHtml(col)}</span>`).join('');
+
+    return `
+      <section class="run-section">
+        <h3>PCA Run ${index + 1}</h3>
+        <p class="muted">${run.n_samples} samples · ${run.n_components} components · ${formatPct((run.explained_variance_ratio ?? []).reduce((sum, value) => sum + Number(value || 0), 0))} total variance explained · ${new Date(run.created_at).toLocaleString()}</p>
+        <div class="metric-grid">
+          <div><span>Rows used</span><strong>${escapeHtml(preprocessing.rows?.used ?? run.n_samples)}</strong></div>
+          <div><span>Values imputed</span><strong>${escapeHtml(preprocessing.rows?.imputedValues ?? 0)}</strong></div>
+          <div><span>Outliers removed</span><strong>${escapeHtml(preprocessing.rows?.droppedOutliers ?? 0)}</strong></div>
+          <div><span>Features</span><strong>${escapeHtml((run.column_names ?? []).length)}</strong></div>
+        </div>
+        <p>${escapeHtml(preprocessing.message || 'No preprocessing report was stored for this PCA run.')}</p>
+        <div class="tag-list">${featureTags}</div>
+        <div class="run-grid">
+          <div>
+            <h4>PCA visualization</h4>
+            ${pcaScatterSvg(run, clusters)}
+          </div>
+          <div>
+            <h4>Variance explained</h4>
+            <table><thead><tr><th>Component</th><th>Variance</th></tr></thead><tbody>${varianceRows}</tbody></table>
+            <h4>Cluster summary</h4>
+            <ul>${clusterSummary}</ul>
+          </div>
+        </div>
+      </section>`;
+  }).join('');
+
+  return `<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8" />
+  <title>${escapeHtml(ds.name || ds.original_filename)} project report</title>
+  <style>
+    body { font-family: Arial, sans-serif; margin: 2rem; color: #122620; line-height: 1.5; background: #f6f1e9; }
+    main { max-width: 1100px; margin: 0 auto; }
+    section { background: rgba(255,255,255,0.82); border: 1px solid #d0dbc8; border-radius: 16px; padding: 1.25rem; margin: 1rem 0; }
+    table { border-collapse: collapse; width: 100%; margin-top: 0.75rem; }
+    th, td { border: 1px solid #c8d5c0; padding: 0.45rem 0.6rem; text-align: left; }
+    th { background: #e6f4ea; }
+    svg { width: 100%; max-width: 520px; height: auto; }
+    .muted { color: #6b705c; }
+    .metric-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 0.75rem; margin: 1rem 0; }
+    .metric-grid div { border: 1px solid #d0dbc8; border-radius: 10px; padding: 0.75rem; background: #fff; }
+    .metric-grid span { display: block; font-size: 0.75rem; text-transform: uppercase; letter-spacing: 0.06rem; color: #6b705c; }
+    .metric-grid strong { font-size: 1.2rem; }
+    .tag-list { display: flex; flex-wrap: wrap; gap: 0.35rem; margin: 0.75rem 0; }
+    .tag { display: inline-block; padding: 0.18rem 0.55rem; border-radius: 6px; background: rgba(18,38,32,0.09); font-size: 0.8rem; }
+    .run-grid { display: grid; grid-template-columns: minmax(280px, 1fr) minmax(240px, 0.8fr); gap: 1rem; align-items: start; }
+    .run-section { page-break-inside: avoid; }
+    @media print { body { background: white; } section { break-inside: avoid; } }
+    @media (max-width: 760px) { .run-grid { grid-template-columns: 1fr; } }
+  </style>
+</head>
+<body>
+  <main>
+    <h1>${escapeHtml(ds.name || ds.original_filename)} project report</h1>
+    <p class="muted">${escapeHtml(ds.original_filename)} · generated ${new Date().toLocaleString()}</p>
+
+    <section>
+      <h2>Dataset summary</h2>
+      <div class="metric-grid">
+        <div><span>Usable rows</span><strong>${escapeHtml(ds.row_count)}</strong></div>
+        <div><span>Total columns</span><strong>${escapeHtml(ds.column_count ?? ds.all_columns?.length ?? 'n/a')}</strong></div>
+        <div><span>Numeric columns</span><strong>${escapeHtml((ds.quantitative_columns ?? []).length)}</strong></div>
+        <div><span>PCA runs</span><strong>${escapeHtml(runs.length)}</strong></div>
+      </div>
+      <p>${escapeHtml(quality.validationMessage || 'Dataset quality was evaluated during upload.')}</p>
+      <h3>Data quality warnings</h3>
+      <ul>${warnings || '<li>No quality warnings were reported.</li>'}</ul>
+    </section>
+
+    <section>
+      <h2>Key insights</h2>
+      <ul>${insights || '<li>No insights available.</li>'}</ul>
+      <h3>Strongest relationships</h3>
+      <ul>${relationships || '<li>No correlation summary available.</li>'}</ul>
+    </section>
+
+    <section>
+      <h2>Summary statistics</h2>
+      <table>
+        <thead><tr><th>Column</th><th>Mean</th><th>Median</th><th>Std dev</th><th>Min</th><th>Max</th></tr></thead>
+        <tbody>${statsRows}</tbody>
+      </table>
+    </section>
+
+    <section>
+      <h2>PCA runs, settings, visualizations, and clusters</h2>
+      ${runSections || '<p class="muted">No PCA runs have been created for this dataset yet.</p>'}
+    </section>
+  </main>
+</body>
+</html>`;
+}
+
 // ── Backward-compat stubs (keep existing tests passing) ──────────────────────
 
 app.get('/welcome', (_req, res) => {
@@ -1210,6 +1380,44 @@ app.get('/api/datasets/:id/report', requireAuth, async (req, res) => {
     return sendHtmlReport(res, reportName, datasetReportHtml(ds, analysis));
   } catch (err) {
     console.error('Dataset report error:', err);
+    return res.status(500).json({ status: 'error', message: 'Server error' });
+  }
+});
+
+app.get('/api/datasets/:id/project-report', requireAuth, async (req, res) => {
+  const datasetId = parseInt(req.params.id, 10);
+  if (isNaN(datasetId)) {
+    return res.status(400).json({ status: 'error', message: 'Invalid dataset id' });
+  }
+
+  try {
+    const uid = await resolveUserId(req);
+    const dsResult = await pool.query(
+      `SELECT original_filename, name, notes, row_count, column_count, quantitative_columns,
+              categorical_columns, all_columns, raw_data, row_metadata, quality_report
+       FROM datasets WHERE id = $1 AND user_id = $2`,
+      [datasetId, uid]
+    );
+    if (!dsResult.rows.length) {
+      return res.status(404).json({ status: 'error', message: 'Dataset not found' });
+    }
+
+    const runsResult = await pool.query(
+      `SELECT id, n_components, explained_variance_ratio, all_explained_variance,
+              loadings, transformed_data, column_names, n_samples,
+              preprocessing_options, preprocessing_report, created_at
+       FROM pca_runs
+       WHERE dataset_id = $1
+       ORDER BY created_at DESC`,
+      [datasetId]
+    );
+
+    const ds = dsResult.rows[0];
+    const analysis = buildDatasetAnalysis(ds);
+    const reportName = `${(ds.name || ds.original_filename).replace(/[^a-z0-9_-]+/gi, '_')}_project_report.html`;
+    return sendHtmlReport(res, reportName, projectReportHtml(ds, analysis, runsResult.rows));
+  } catch (err) {
+    console.error('Project report error:', err);
     return res.status(500).json({ status: 'error', message: 'Server error' });
   }
 });
