@@ -3,6 +3,7 @@ import Login from "./pages/Login";
 import Register from "./pages/Register";
 import Projects from "./pages/Projects";
 import Visualize from "./pages/Visualize";
+import Compare from "./pages/Compare";
 
 // ── Auth helpers ──────────────────────────────────────────────────────────────
 
@@ -44,6 +45,7 @@ function Navbar() {
         {loggedIn ? (
           <>
             <NavLink to="/projects">Projects</NavLink>
+            <NavLink to="/compare">Compare</NavLink>
             <button className="btn-link" onClick={handleLogout}>
               Log out
             </button>
@@ -117,6 +119,14 @@ export default function App() {
           element={
             <Protected>
               <Visualize />
+            </Protected>
+          }
+        />
+        <Route
+          path="/compare"
+          element={
+            <Protected>
+              <Compare />
             </Protected>
           }
         />
