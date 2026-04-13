@@ -88,7 +88,11 @@ async function ensureSchema() {
   await pool.query('ALTER TABLE datasets ADD COLUMN IF NOT EXISTS quality_report JSONB');
   await pool.query('ALTER TABLE datasets ADD COLUMN IF NOT EXISTS categorical_columns TEXT[]');
   await pool.query('ALTER TABLE datasets ADD COLUMN IF NOT EXISTS row_metadata JSONB');
+  await pool.query('ALTER TABLE datasets ADD COLUMN IF NOT EXISTS all_records JSONB');
   await pool.query('ALTER TABLE pca_runs ADD COLUMN IF NOT EXISTS loadings JSONB');
+  await pool.query('ALTER TABLE pca_runs ADD COLUMN IF NOT EXISTS preprocessing_options JSONB');
+  await pool.query('ALTER TABLE pca_runs ADD COLUMN IF NOT EXISTS preprocessing_report JSONB');
+  await pool.query('ALTER TABLE pca_runs ADD COLUMN IF NOT EXISTS row_indexes JSONB');
 }
 
 function isNumericValue(value) {
@@ -151,6 +155,10 @@ function buildQualityReport(records, allColumns, quantitativeColumns, cleanRows)
   }
 
   return {
+    validForPca: quantitativeColumns.length >= 2 && validRows >= 2,
+    validationMessage: quantitativeColumns.length >= 2 && validRows >= 2
+      ? `Dataset is valid for PCA: ${validRows} usable rows and ${quantitativeColumns.length} numeric columns.`
+      : 'Dataset is invalid for PCA because it needs at least 2 usable rows and 2 numeric columns.',
     rows: {
       total: totalRows,
       usableForPca: validRows,
@@ -250,10 +258,6 @@ function buildDatasetFromRecords(records, filename) {
     .filter(({ row }) => quantColumns.every((col) => isNumericValue(row[col])));
   const clean = cleanRowsWithIndex.map(({ row }) => row);
 
-  if (clean.length < 2) {
-    throw new Error('Not enough valid rows after removing rows with missing values.');
-  }
-
   const categoricalColumns = detectCategoricalColumns(records, allColumns, quantColumns);
   const matrix = clean.map((row) => quantColumns.map((col) => Number(row[col])));
   const preview = records.slice(0, 10).map((row) => {
@@ -271,6 +275,7 @@ function buildDatasetFromRecords(records, filename) {
     categoricalColumns,
     matrix,
     preview,
+    records,
     rowMetadata,
     qualityReport,
     rowCount: clean.length,
@@ -283,8 +288,8 @@ async function saveDataset(uid, dataset, name, notes = '') {
     `INSERT INTO datasets
        (user_id, original_filename, name, notes, row_count, column_count,
         quantitative_columns, categorical_columns, all_columns, raw_data,
-        preview_data, row_metadata, quality_report)
-     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)
+        preview_data, row_metadata, quality_report, all_records)
+     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)
      RETURNING id`,
     [
       uid,
@@ -300,6 +305,7 @@ async function saveDataset(uid, dataset, name, notes = '') {
       JSON.stringify(dataset.preview),
       JSON.stringify(dataset.rowMetadata),
       JSON.stringify(dataset.qualityReport),
+      JSON.stringify(dataset.records),
     ]
   );
 
@@ -535,6 +541,255 @@ function runKMeans(points, requestedK) {
   };
 }
 
+function normalizePreprocessingOptions(body = {}) {
+  const outlierMethod = ['none', 'zscore', 'iqr'].includes(body.outlierMethod)
+    ? body.outlierMethod
+    : 'none';
+  const missingValueStrategy = ['drop', 'mean', 'median'].includes(body.missingValueStrategy)
+    ? body.missingValueStrategy
+    : 'drop';
+  const zThreshold = Math.min(Math.max(Number(body.zThreshold) || 3, 1), 6);
+
+  return {
+    scale: body.scale === undefined ? true : Boolean(body.scale),
+    autoDropConstant: body.autoDropConstant === undefined ? true : Boolean(body.autoDropConstant),
+    outlierMethod,
+    zThreshold,
+    missingValueStrategy,
+  };
+}
+
+function summarizeValues(values) {
+  const numeric = values.filter((value) => Number.isFinite(value));
+  const sorted = [...numeric].sort((a, b) => a - b);
+  const mean = numeric.length
+    ? numeric.reduce((sum, value) => sum + value, 0) / numeric.length
+    : 0;
+  const variance = numeric.length
+    ? numeric.reduce((sum, value) => sum + (value - mean) ** 2, 0) / numeric.length
+    : 0;
+
+  return {
+    mean,
+    stdDev: Math.sqrt(variance),
+    q1: quantile(sorted, 0.25),
+    q3: quantile(sorted, 0.75),
+  };
+}
+
+function rowHasOutlier(row, columnStats, options) {
+  if (options.outlierMethod === 'none') return false;
+
+  return row.some((value, index) => {
+    const stats = columnStats[index];
+    if (!stats) return false;
+
+    if (options.outlierMethod === 'zscore') {
+      return stats.stdDev > 0 && Math.abs((value - stats.mean) / stats.stdDev) > options.zThreshold;
+    }
+
+    const iqr = stats.q3 - stats.q1;
+    if (!Number.isFinite(iqr) || iqr <= 0) return false;
+    return value < stats.q1 - 1.5 * iqr || value > stats.q3 + 1.5 * iqr;
+  });
+}
+
+function median(values) {
+  const sorted = values.filter((value) => Number.isFinite(value)).sort((a, b) => a - b);
+  return quantile(sorted, 0.5);
+}
+
+function makeStoredRecords(ds) {
+  if (Array.isArray(ds.all_records) && ds.all_records.length > 0) {
+    return ds.all_records.map((row, index) => ({ row, originalIndex: index }));
+  }
+
+  const numericColumns = ds.quantitative_columns ?? [];
+  const metadata = ds.row_metadata ?? [];
+  return (ds.raw_data ?? []).map((values, index) => ({
+    originalIndex: index,
+    row: {
+      ...(metadata[index]?.values ?? {}),
+      ...Object.fromEntries(numericColumns.map((col, colIndex) => [col, values[colIndex]])),
+    },
+  }));
+}
+
+function uniqueCategoryLevels(records, column) {
+  return [...new Set(records
+    .map(({ row }) => String(row[column] ?? '').trim())
+    .filter(Boolean))]
+    .sort((a, b) => a.localeCompare(b))
+    .slice(0, 20);
+}
+
+function validateAndPreprocessForPca(ds, selectedColumns, selectedCategoricalColumns, options) {
+  const availableColumns = ds.quantitative_columns ?? [];
+  const sourceRecords = makeStoredRecords(ds);
+  const warnings = [];
+  let droppedInvalidRows = 0;
+  let droppedOutlierRows = 0;
+  let imputedValues = 0;
+
+  const fillValues = {};
+  for (const column of selectedColumns) {
+    const values = sourceRecords
+      .map(({ row }) => Number(row[column]))
+      .filter((value) => Number.isFinite(value));
+    if (options.missingValueStrategy === 'mean') {
+      fillValues[column] = values.length
+        ? values.reduce((sum, value) => sum + value, 0) / values.length
+        : null;
+    } else if (options.missingValueStrategy === 'median') {
+      fillValues[column] = median(values);
+    }
+  }
+
+  let rows = sourceRecords.map(({ row, originalIndex }) => {
+    const values = [];
+    let invalid = false;
+    let imputed = 0;
+
+    for (const column of selectedColumns) {
+      const value = Number(row[column]);
+      if (Number.isFinite(value)) {
+        values.push(value);
+        continue;
+      }
+      if (options.missingValueStrategy === 'drop') {
+        invalid = true;
+        values.push(null);
+        continue;
+      }
+      const fillValue = fillValues[column];
+      if (Number.isFinite(fillValue)) {
+        values.push(fillValue);
+        imputed += 1;
+      } else {
+        invalid = true;
+        values.push(null);
+      }
+    }
+
+    return { values, originalIndex, row, invalid, imputed };
+  });
+
+  const beforeInvalidRows = rows.length;
+  rows = rows.filter(({ invalid, values }) => !invalid && values.every((value) => Number.isFinite(value)));
+  droppedInvalidRows = beforeInvalidRows - rows.length;
+  imputedValues = rows.reduce((sum, row) => sum + row.imputed, 0);
+
+  if (droppedInvalidRows > 0) {
+    warnings.push(`${droppedInvalidRows} row${droppedInvalidRows === 1 ? '' : 's'} removed because selected numeric columns contained missing or invalid values.`);
+  }
+  if (imputedValues > 0) {
+    warnings.push(`${imputedValues} missing or invalid numeric value${imputedValues === 1 ? '' : 's'} filled with the column ${options.missingValueStrategy}.`);
+  }
+
+  const categoricalLevels = {};
+  const categoricalFeatureNames = [];
+  for (const column of selectedCategoricalColumns) {
+    const levels = uniqueCategoryLevels(sourceRecords, column);
+    categoricalLevels[column] = levels;
+    if (levels.length === 0) {
+      warnings.push(`${column} was not encoded because it has no non-empty category values.`);
+      continue;
+    }
+    if (levels.length >= 20) {
+      warnings.push(`${column} was limited to its first 20 category levels to avoid too many PCA features.`);
+    }
+    for (const level of levels) {
+      categoricalFeatureNames.push(`${column}=${level}`);
+    }
+  }
+
+  if (categoricalFeatureNames.length > 0) {
+    rows = rows.map((item) => ({
+      ...item,
+      values: [
+        ...item.values,
+        ...selectedCategoricalColumns.flatMap((column) =>
+          (categoricalLevels[column] ?? []).map((level) =>
+            String(item.row[column] ?? '').trim() === level ? 1 : 0
+          )
+        ),
+      ],
+    }));
+  }
+
+  if (options.outlierMethod !== 'none' && rows.length > 0) {
+    const columnStats = selectedColumns.map((_, index) => summarizeValues(rows.map(({ values }) => values[index])));
+    const beforeOutliers = rows.length;
+    rows = rows.filter(({ values }) => !rowHasOutlier(values, columnStats, options));
+    droppedOutlierRows = beforeOutliers - rows.length;
+    if (droppedOutlierRows > 0) {
+      const method = options.outlierMethod === 'zscore'
+        ? `z-score greater than ${options.zThreshold}`
+        : '1.5x IQR fences';
+      warnings.push(`${droppedOutlierRows} outlier row${droppedOutlierRows === 1 ? '' : 's'} removed using ${method}.`);
+    }
+  }
+
+  let outputColumns = [...selectedColumns, ...categoricalFeatureNames];
+  let outputIndexes = outputColumns.map((_, index) => index);
+  const removedColumns = [];
+
+  if (options.autoDropConstant && rows.length > 0) {
+    outputIndexes = outputIndexes.filter((columnIndex) => {
+      const values = rows.map(({ values }) => values[columnIndex]);
+      const first = values[0];
+      const isConstant = values.every((value) => value === first);
+      if (isConstant) {
+        removedColumns.push(outputColumns[columnIndex]);
+        return false;
+      }
+      return true;
+    });
+    outputColumns = outputIndexes.map((index) => outputColumns[index]);
+    if (removedColumns.length > 0) {
+      warnings.push(`Removed constant column${removedColumns.length === 1 ? '' : 's'}: ${removedColumns.join(', ')}.`);
+    }
+  }
+
+  const matrix = rows.map(({ values }) => outputIndexes.map((columnIndex) => values[columnIndex]));
+  const rowIndexes = rows.map(({ originalIndex }) => originalIndex);
+  const valid = matrix.length >= 2 && outputColumns.length >= 2;
+  const reasons = [];
+  if (outputColumns.length < 2) reasons.push('PCA requires at least two usable numeric columns after preprocessing.');
+  if (matrix.length < 2) reasons.push('PCA requires at least two usable rows after preprocessing.');
+
+  return {
+    matrix,
+    columnNames: outputColumns,
+    rowIndexes,
+    report: {
+      valid,
+      status: valid ? 'valid' : 'invalid',
+      message: valid
+        ? `Dataset is valid for PCA after preprocessing: ${matrix.length} rows and ${outputColumns.length} numeric columns will be used.`
+        : reasons.join(' '),
+      options,
+      rows: {
+        input: sourceRecords.length,
+        afterInvalidRemoval: sourceRecords.length - droppedInvalidRows,
+        afterOutlierRemoval: rows.length,
+        used: matrix.length,
+        droppedInvalid: droppedInvalidRows,
+        droppedOutliers: droppedOutlierRows,
+        imputedValues,
+      },
+      columns: {
+        selected: selectedColumns,
+        encodedCategorical: selectedCategoricalColumns,
+        used: outputColumns,
+        removedConstant: removedColumns,
+        categoricalLevels,
+      },
+      warnings,
+    },
+  };
+}
+
 function escapeHtml(value) {
   return String(value ?? '')
     .replace(/&/g, '&amp;')
@@ -600,6 +855,7 @@ function datasetReportHtml(ds, analysis) {
 
 function pcaReportHtml(run) {
   const total = (run.explained_variance_ratio ?? []).reduce((sum, value) => sum + Number(value || 0), 0);
+  const preprocessing = run.preprocessing_report ?? {};
   const varianceRows = (run.explained_variance_ratio ?? []).map((value, index) =>
     `<tr><td>PC${index + 1}</td><td>${formatPct(value)}</td></tr>`
   ).join('');
@@ -629,6 +885,11 @@ function pcaReportHtml(run) {
 <body>
   <h1>${escapeHtml(run.original_filename)} PCA report</h1>
   <p class="muted">${run.n_samples} samples · ${run.n_components} components · ${formatPct(total)} total variance explained</p>
+  <h2>Preprocessing Validation</h2>
+  <p>${escapeHtml(preprocessing.message || 'No preprocessing report was stored for this run.')}</p>
+  ${preprocessing.rows ? `<p class="muted">Rows used: ${escapeHtml(preprocessing.rows.used)} of ${escapeHtml(preprocessing.rows.input)} · Values imputed: ${escapeHtml(preprocessing.rows.imputedValues || 0)} · Outliers removed: ${escapeHtml(preprocessing.rows.droppedOutliers || 0)}</p>` : ''}
+  ${preprocessing.columns ? `<p class="muted">Columns used: ${(preprocessing.columns.used ?? []).map(escapeHtml).join(', ')}</p>` : ''}
+  ${preprocessing.columns?.encodedCategorical?.length ? `<p class="muted">Encoded categorical columns: ${preprocessing.columns.encodedCategorical.map(escapeHtml).join(', ')}</p>` : ''}
   <h2>Input Features</h2>
   <p>${(run.column_names ?? []).map(escapeHtml).join(', ')}</p>
   <h2>Variance Explained</h2>
@@ -884,6 +1145,10 @@ app.get('/api/datasets/:id/quality', requireAuth, async (req, res) => {
         .filter((col) => !(ds.quantitative_columns ?? []).includes(col))
         .map((name) => ({ name, missingCount: null, numericLikeCount: null })),
       warnings: [],
+      validForPca: (ds.quantitative_columns?.length ?? 0) >= 2 && ds.row_count >= 2,
+      validationMessage: (ds.quantitative_columns?.length ?? 0) >= 2 && ds.row_count >= 2
+        ? `Dataset is valid for PCA: ${ds.row_count} usable rows and ${ds.quantitative_columns?.length ?? 0} numeric columns.`
+        : 'Dataset is invalid for PCA because it needs at least 2 usable rows and 2 numeric columns.',
     };
     return res.json({
       status: 'success',
@@ -1067,11 +1332,17 @@ app.post('/api/datasets/:id/pca', requireAuth, async (req, res) => {
 
     const ds = dsResult.rows[0];
     const availableColumns = ds.quantitative_columns ?? [];
+    const availableCategoricalColumns = ds.categorical_columns ?? [];
     const requestedColumns = Array.isArray(req.body?.columns)
       ? [...new Set(req.body.columns.map(String).map((col) => col.trim()).filter(Boolean))]
       : null;
-    const selectedColumns = requestedColumns?.length ? requestedColumns : availableColumns;
+    const requestedCategoricalColumns = Array.isArray(req.body?.categoricalColumns)
+      ? [...new Set(req.body.categoricalColumns.map(String).map((col) => col.trim()).filter(Boolean))]
+      : [];
+    const selectedColumns = requestedColumns !== null ? requestedColumns : availableColumns;
+    const selectedCategoricalColumns = requestedCategoricalColumns;
     const invalidColumns = selectedColumns.filter((col) => !availableColumns.includes(col));
+    const invalidCategoricalColumns = selectedCategoricalColumns.filter((col) => !availableCategoricalColumns.includes(col));
 
     if (invalidColumns.length > 0) {
       return res.status(400).json({
@@ -1079,16 +1350,38 @@ app.post('/api/datasets/:id/pca', requireAuth, async (req, res) => {
         message: `Unknown numeric column${invalidColumns.length === 1 ? '' : 's'}: ${invalidColumns.join(', ')}`,
       });
     }
-    if (selectedColumns.length < 2) {
+    if (invalidCategoricalColumns.length > 0) {
       return res.status(400).json({
         status: 'error',
-        message: 'Choose at least 2 numeric columns for PCA.',
+        message: `Unknown categorical column${invalidCategoricalColumns.length === 1 ? '' : 's'}: ${invalidCategoricalColumns.join(', ')}`,
+      });
+    }
+    if (selectedColumns.length === 0 && selectedCategoricalColumns.length === 0) {
+      return res.status(400).json({
+        status: 'error',
+        message: 'Choose at least one numeric or categorical feature for PCA.',
       });
     }
 
-    const columnIndexes = selectedColumns.map((col) => availableColumns.indexOf(col));
-    const matrix = ds.raw_data.map((row) => columnIndexes.map((index) => Number(row[index])));
-    const nFeatures = selectedColumns.length;
+    const preprocessingOptions = normalizePreprocessingOptions(req.body);
+    const preprocessing = validateAndPreprocessForPca(
+      ds,
+      selectedColumns,
+      selectedCategoricalColumns,
+      preprocessingOptions
+    );
+
+    if (!preprocessing.report.valid) {
+      return res.status(400).json({
+        status: 'error',
+        message: preprocessing.report.message,
+        preprocessingReport: preprocessing.report,
+      });
+    }
+
+    const matrix = preprocessing.matrix;
+    const pcaColumns = preprocessing.columnNames;
+    const nFeatures = pcaColumns.length;
 
     // Decide on number of output components
     let nComponents = nFeatures >= 3 ? 3 : 2;
@@ -1102,20 +1395,28 @@ app.post('/api/datasets/:id/pca', requireAuth, async (req, res) => {
       }
       nComponents = requestedComponents;
     }
-    const scale = req.body?.scale === undefined ? true : Boolean(req.body.scale);
-
     let pcaResult;
     try {
-      pcaResult = runPCA(matrix, nComponents, { scale });
+      pcaResult = runPCA(matrix, nComponents, { scale: preprocessingOptions.scale });
     } catch (err) {
-      return res.status(400).json({ status: 'error', message: err.message });
+      return res.status(400).json({
+        status: 'error',
+        message: err.message,
+        preprocessingReport: {
+          ...preprocessing.report,
+          valid: false,
+          status: 'invalid',
+          message: err.message,
+        },
+      });
     }
 
     const runResult = await pool.query(
       `INSERT INTO pca_runs
          (dataset_id, n_components, explained_variance_ratio,
-          all_explained_variance, loadings, transformed_data, column_names, n_samples)
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+          all_explained_variance, loadings, transformed_data, column_names, n_samples,
+          preprocessing_options, preprocessing_report, row_indexes)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
        RETURNING id`,
       [
         datasetId,
@@ -1124,8 +1425,11 @@ app.post('/api/datasets/:id/pca', requireAuth, async (req, res) => {
         JSON.stringify(pcaResult.allExplainedVariance),
         JSON.stringify(pcaResult.loadings),
         JSON.stringify(pcaResult.transformed),
-        selectedColumns,
+        pcaColumns,
         pcaResult.nSamples,
+        JSON.stringify(preprocessingOptions),
+        JSON.stringify(preprocessing.report),
+        JSON.stringify(preprocessing.rowIndexes),
       ]
     );
 
@@ -1138,9 +1442,10 @@ app.post('/api/datasets/:id/pca', requireAuth, async (req, res) => {
       loadings: pcaResult.loadings,
       totalExplained: pcaResult.totalExplained,
       nSamples: pcaResult.nSamples,
-      columnNames: selectedColumns,
+      columnNames: pcaColumns,
       filename: ds.original_filename,
-      scale,
+      scale: preprocessingOptions.scale,
+      preprocessingReport: preprocessing.report,
     });
   } catch (err) {
     console.error('PCA run error:', err);
@@ -1157,7 +1462,8 @@ app.get('/api/datasets/:id/pca', requireAuth, async (req, res) => {
   try {
     const uid = await resolveUserId(req);
     const result = await pool.query(
-      `SELECT r.id, r.n_components, r.explained_variance_ratio, r.column_names, r.n_samples, r.created_at
+      `SELECT r.id, r.n_components, r.explained_variance_ratio, r.column_names, r.n_samples,
+              r.preprocessing_report, r.created_at
        FROM pca_runs r
        JOIN datasets d ON d.id = r.dataset_id
        WHERE r.dataset_id = $1 AND d.user_id = $2
@@ -1180,7 +1486,8 @@ app.get('/api/pca/:id', requireAuth, async (req, res) => {
   try {
     const uid = await resolveUserId(req);
     const result = await pool.query(
-      `SELECT r.*, d.original_filename, d.row_metadata, d.categorical_columns
+      `SELECT r.*, d.original_filename, d.row_metadata, d.categorical_columns,
+              d.all_records, d.all_columns, d.quantitative_columns
        FROM pca_runs r
        JOIN datasets d ON d.id = r.dataset_id
        WHERE r.id = $1 AND d.user_id = $2`,
@@ -1190,6 +1497,22 @@ app.get('/api/pca/:id', requireAuth, async (req, res) => {
       return res.status(404).json({ status: 'error', message: 'PCA run not found' });
     }
     const run = result.rows[0];
+    const rowMetadata = Array.isArray(run.row_indexes) && Array.isArray(run.all_records)
+      ? run.row_indexes.map((index) => {
+        const row = run.all_records[index] ?? {};
+        return {
+          rowNumber: index + 1,
+          labels: Object.fromEntries((run.categorical_columns ?? []).map((col) => [col, row[col] ?? ''])),
+          values: Object.fromEntries((run.all_columns ?? []).map((col) => [col, row[col] ?? ''])),
+          numeric: Object.fromEntries((run.quantitative_columns ?? []).map((col) => {
+            const value = Number(row[col]);
+            return [col, Number.isFinite(value) ? value : null];
+          })),
+        };
+      })
+      : Array.isArray(run.row_indexes)
+        ? run.row_indexes.map((index) => (run.row_metadata ?? [])[index] ?? null)
+      : run.row_metadata ?? [];
     return res.json({
       status: 'success',
       runId: run.id,
@@ -1200,10 +1523,12 @@ app.get('/api/pca/:id', requireAuth, async (req, res) => {
       loadings: run.loadings ?? [],
       transformedData: run.transformed_data,
       columnNames: run.column_names,
-      rowMetadata: run.row_metadata ?? [],
+      rowMetadata,
       labelColumns: run.categorical_columns ?? [],
       nSamples: run.n_samples,
       createdAt: run.created_at,
+      preprocessingOptions: run.preprocessing_options ?? {},
+      preprocessingReport: run.preprocessing_report ?? null,
     });
   } catch (err) {
     console.error('Get PCA run error:', err);

@@ -349,6 +349,33 @@ export default function Visualize() {
           ))}
         </div>
 
+        {run.preprocessingReport && (
+          <div className={`validation-card ${run.preprocessingReport.valid ? "valid" : "invalid"}`}>
+            <strong>
+              {run.preprocessingReport.valid ? "Valid after preprocessing" : "Invalid preprocessing result"}
+            </strong>
+            <p>{run.preprocessingReport.message}</p>
+            {run.preprocessingReport.rows && (
+              <p className="muted">
+                Rows used: {run.preprocessingReport.rows.used} of {run.preprocessingReport.rows.input}
+                {" "}· Invalid rows removed: {run.preprocessingReport.rows.droppedInvalid}
+                {" "}· Values imputed: {run.preprocessingReport.rows.imputedValues}
+                {" "}· Outliers removed: {run.preprocessingReport.rows.droppedOutliers}
+              </p>
+            )}
+            {(run.preprocessingReport.columns?.encodedCategorical ?? []).length > 0 && (
+              <p className="muted">
+                Encoded categorical columns: {run.preprocessingReport.columns.encodedCategorical.join(", ")}
+              </p>
+            )}
+            {(run.preprocessingReport.columns?.removedConstant ?? []).length > 0 && (
+              <p className="muted">
+                Constant columns removed: {run.preprocessingReport.columns.removedConstant.join(", ")}
+              </p>
+            )}
+          </div>
+        )}
+
         <div className="insight-grid">
           {pcaInsights.map((insight) => (
             <div key={insight} className="insight-card">{insight}</div>

@@ -477,6 +477,28 @@ h3 { font-size: 1.1rem; margin-bottom: 0.75rem; }
 
 .quality-table { min-width: 680px; }
 
+.validation-card {
+  display: grid;
+  gap: 0.35rem;
+  padding: 0.85rem 1rem;
+  border-radius: 10px;
+  border: 1px solid #d0dbc8;
+  background: rgba(255, 255, 255, 0.7);
+  font-size: 0.9rem;
+}
+
+.validation-card p { margin: 0; }
+
+.validation-card.valid {
+  border-color: #9ccc9c;
+  background: rgba(230, 244, 234, 0.78);
+}
+
+.validation-card.invalid {
+  border-color: #e0a5a5;
+  background: rgba(253, 232, 232, 0.78);
+}
+
 .insight-grid {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(190px, 1fr));

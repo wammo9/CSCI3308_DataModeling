@@ -49,9 +49,15 @@ export default function Projects() {
   // PCA options state
   const [configuringId, setConfiguringId] = useState(null);
   const [selectedColumns, setSelectedColumns] = useState([]);
+  const [selectedCategoricalColumns, setSelectedCategoricalColumns] = useState([]);
   const [componentCount, setComponentCount] = useState(3);
   const [scaleFeatures, setScaleFeatures] = useState(true);
+  const [autoDropConstant, setAutoDropConstant] = useState(true);
+  const [outlierMethod, setOutlierMethod] = useState("none");
+  const [zThreshold, setZThreshold] = useState(3);
+  const [missingValueStrategy, setMissingValueStrategy] = useState("drop");
   const [configError, setConfigError] = useState("");
+  const [preprocessingReport, setPreprocessingReport] = useState(null);
 
   // Run history state
   const [openRunsId, setOpenRunsId] = useState(null);
@@ -275,9 +281,15 @@ export default function Projects() {
     const columns = ds.quantitative_columns ?? [];
     setConfiguringId(ds.id);
     setSelectedColumns(columns);
+    setSelectedCategoricalColumns([]);
     setComponentCount(columns.length >= 3 ? 3 : 2);
     setScaleFeatures(true);
+    setAutoDropConstant(true);
+    setOutlierMethod("none");
+    setZThreshold(3);
+    setMissingValueStrategy("drop");
     setConfigError("");
+    setPreprocessingReport(null);
   }
 
   function toggleSelectedColumn(column) {
@@ -286,10 +298,17 @@ export default function Projects() {
     );
   }
 
+  function toggleSelectedCategoricalColumn(column) {
+    setSelectedCategoricalColumns((cols) =>
+      cols.includes(column) ? cols.filter((c) => c !== column) : [...cols, column]
+    );
+  }
+
   async function handleConfiguredPCA(datasetId) {
     setConfigError("");
-    if (selectedColumns.length < 2) {
-      setConfigError("Choose at least two numeric features.");
+    setPreprocessingReport(null);
+    if (selectedColumns.length === 0 && selectedCategoricalColumns.length === 0) {
+      setConfigError("Choose at least one numeric or categorical feature.");
       return;
     }
 
@@ -300,13 +319,19 @@ export default function Projects() {
         headers: { ...authHeaders(), "Content-Type": "application/json" },
         body: JSON.stringify({
           columns: selectedColumns,
+          categoricalColumns: selectedCategoricalColumns,
           nComponents: componentCount,
           scale: scaleFeatures,
+          autoDropConstant,
+          outlierMethod,
+          zThreshold,
+          missingValueStrategy,
         }),
       });
       const data = await res.json();
       if (!res.ok) {
         setConfigError(data.message || "PCA failed");
+        setPreprocessingReport(data.preprocessingReport ?? null);
       } else {
         navigate(`/visualize/${data.runId}`);
       }
@@ -666,23 +691,68 @@ export default function Projects() {
                             <div className="detail-panel pca-options-panel">
                               <div>
                                 <h3>PCA options</h3>
-                                <p className="muted">Choose the numeric features for the next PCA run.</p>
+                                <p className="muted">
+                                  Choose features and preprocessing. A run is valid only if at least two rows
+                                  and two numeric columns remain after these steps.
+                                </p>
                               </div>
 
                               {configError && <div className="alert alert-error">{configError}</div>}
+                              {preprocessingReport && (
+                                <div className={`validation-card ${preprocessingReport.valid ? "valid" : "invalid"}`}>
+                                  <strong>
+                                    {preprocessingReport.valid ? "Valid dataset for PCA" : "Invalid PCA input"}
+                                  </strong>
+                                  <p>{preprocessingReport.message}</p>
+                                  {preprocessingReport.rows && (
+                                    <p className="muted">
+                                      Rows used: {formatNumber(preprocessingReport.rows.used)} of {formatNumber(preprocessingReport.rows.input)}
+                                      {" "}· Invalid rows removed: {formatNumber(preprocessingReport.rows.droppedInvalid)}
+                                      {" "}· Values imputed: {formatNumber(preprocessingReport.rows.imputedValues)}
+                                      {" "}· Outliers removed: {formatNumber(preprocessingReport.rows.droppedOutliers)}
+                                    </p>
+                                  )}
+                                  {(preprocessingReport.columns?.encodedCategorical ?? []).length > 0 && (
+                                    <p className="muted">
+                                      Encoded categorical columns: {preprocessingReport.columns.encodedCategorical.join(", ")}
+                                    </p>
+                                  )}
+                                </div>
+                              )}
 
-                              <div className="column-picker">
-                                {(ds.quantitative_columns ?? []).map((col) => (
-                                  <label key={col} className="check-pill">
-                                    <input
-                                      type="checkbox"
-                                      checked={selectedColumns.includes(col)}
-                                      onChange={() => toggleSelectedColumn(col)}
-                                    />
-                                    <span>{col}</span>
-                                  </label>
-                                ))}
+                              <div>
+                                <span className="meta-label">Numeric features</span>
+                                <div className="column-picker">
+                                  {(ds.quantitative_columns ?? []).map((col) => (
+                                    <label key={col} className="check-pill">
+                                      <input
+                                        type="checkbox"
+                                        checked={selectedColumns.includes(col)}
+                                        onChange={() => toggleSelectedColumn(col)}
+                                      />
+                                      <span>{col}</span>
+                                    </label>
+                                  ))}
+                                </div>
                               </div>
+
+                              {(ds.categorical_columns ?? []).length > 0 && (
+                                <div>
+                                  <span className="meta-label">Categorical columns to one-hot encode</span>
+                                  <div className="column-picker">
+                                    {(ds.categorical_columns ?? []).map((col) => (
+                                      <label key={col} className="check-pill">
+                                        <input
+                                          type="checkbox"
+                                          checked={selectedCategoricalColumns.includes(col)}
+                                          onChange={() => toggleSelectedCategoricalColumn(col)}
+                                        />
+                                        <span>{col}</span>
+                                      </label>
+                                    ))}
+                                  </div>
+                                </div>
+                              )}
 
                               <div className="option-grid">
                                 <label className="field compact-field">
@@ -696,6 +766,44 @@ export default function Projects() {
                                   </select>
                                 </label>
 
+                                <label className="field compact-field">
+                                  <span>Missing values</span>
+                                  <select
+                                    value={missingValueStrategy}
+                                    onChange={(e) => setMissingValueStrategy(e.target.value)}
+                                  >
+                                    <option value="drop">Drop rows</option>
+                                    <option value="mean">Fill with mean</option>
+                                    <option value="median">Fill with median</option>
+                                  </select>
+                                </label>
+
+                                <label className="field compact-field">
+                                  <span>Outlier rows</span>
+                                  <select
+                                    value={outlierMethod}
+                                    onChange={(e) => setOutlierMethod(e.target.value)}
+                                  >
+                                    <option value="none">Keep all rows</option>
+                                    <option value="zscore">Remove by z-score</option>
+                                    <option value="iqr">Remove by IQR</option>
+                                  </select>
+                                </label>
+
+                                {outlierMethod === "zscore" && (
+                                  <label className="field compact-field">
+                                    <span>Z threshold</span>
+                                    <input
+                                      type="number"
+                                      min="1"
+                                      max="6"
+                                      step="0.5"
+                                      value={zThreshold}
+                                      onChange={(e) => setZThreshold(Number(e.target.value))}
+                                    />
+                                  </label>
+                                )}
+
                                 <label className="check-row">
                                   <input
                                     type="checkbox"
@@ -703,6 +811,15 @@ export default function Projects() {
                                     onChange={(e) => setScaleFeatures(e.target.checked)}
                                   />
                                   <span>Scale features before PCA</span>
+                                </label>
+
+                                <label className="check-row">
+                                  <input
+                                    type="checkbox"
+                                    checked={autoDropConstant}
+                                    onChange={(e) => setAutoDropConstant(e.target.checked)}
+                                  />
+                                  <span>Remove constant columns</span>
                                 </label>
                               </div>
 
@@ -737,6 +854,9 @@ export default function Projects() {
                                           {pct(run.explained_variance_ratio)} variance, {run.n_samples} samples,
                                           {" "}{new Date(run.created_at).toLocaleString()}
                                         </p>
+                                        {run.preprocessing_report?.message && (
+                                          <p className="muted">{run.preprocessing_report.message}</p>
+                                        )}
                                         <div className="tag-list">
                                           {(run.column_names ?? []).map((col) => (
                                             <span key={col} className="tag">{col}</span>
@@ -768,6 +888,10 @@ export default function Projects() {
                           <td colSpan={6}>
                             <div className="detail-panel">
                               <h3>Dataset quality</h3>
+                              <div className={`validation-card ${report.validForPca !== false ? "valid" : "invalid"}`}>
+                                <strong>{report.validForPca !== false ? "Valid dataset for PCA" : "Invalid dataset for PCA"}</strong>
+                                <p>{report.validationMessage || "Dataset quality was evaluated during upload."}</p>
+                              </div>
                               <div className="quality-metrics">
                                 <div>
                                   <span className="meta-label">Rows used</span>

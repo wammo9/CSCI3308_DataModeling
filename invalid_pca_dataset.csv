@@ -1,0 +1,7 @@
+student_name,group,score,study_hours,attendance_rate,constant_flag,comment
+Alex,A,88,12,0.95,1,valid-looking row
+Blair,B,91,ten,0.91,1,study_hours mixes text with numbers
+Casey,A,,8,absent,1,missing score and text attendance
+Drew,B,84,,0.84,1,missing study_hours
+Emery,C,not_available,9,0.89,1,score mixes text with numbers
+Finley,C,79,7,,1,missing attendance

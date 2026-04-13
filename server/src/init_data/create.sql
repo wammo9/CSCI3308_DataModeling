@@ -31,6 +31,7 @@ CREATE TABLE datasets (
     preview_data          JSONB,
     row_metadata          JSONB,
     quality_report        JSONB,
+    all_records           JSONB,
     upload_timestamp      TIMESTAMPTZ  DEFAULT NOW()
 );
 
@@ -46,5 +47,8 @@ CREATE TABLE pca_runs (
     transformed_data         JSONB,
     column_names             TEXT[],
     n_samples                INTEGER,
+    preprocessing_options    JSONB,
+    preprocessing_report     JSONB,
+    row_indexes              JSONB,
     created_at               TIMESTAMPTZ  DEFAULT NOW()
 );
