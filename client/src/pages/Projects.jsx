@@ -590,29 +590,76 @@ export default function Projects() {
     } catch { alert("Could not reach the server."); }
   }
 
+  const totalRows = datasets.reduce((sum, dataset) => sum + Number(dataset.row_count || 0), 0);
+  const averageNumericColumns = datasets.length
+    ? datasets.reduce((sum, dataset) => sum + Number(dataset.quantitative_columns?.length || 0), 0) / datasets.length
+    : 0;
+
   return (
-    <main className="app-shell">
+    <main className="app-shell workspace-shell">
+      <section className="card workspace-header">
+        <div>
+          <p className="eyebrow">Workspace</p>
+          <h1 className="page-title">Your modeling projects</h1>
+          <p className="lead">
+            Bring messy CSVs into a calmer workflow: upload, assess quality, tune PCA,
+            and compare outcomes without losing the story of what changed.
+          </p>
+        </div>
+        <div className="quality-metrics workspace-metrics">
+          <div>
+            <span className="meta-label">Datasets</span>
+            <strong>{formatNumber(datasets.length)}</strong>
+          </div>
+          <div>
+            <span className="meta-label">Rows tracked</span>
+            <strong>{formatNumber(totalRows)}</strong>
+          </div>
+          <div>
+            <span className="meta-label">Avg. numeric columns</span>
+            <strong>{formatNumber(averageNumericColumns)}</strong>
+          </div>
+          <div>
+            <span className="meta-label">Sample starters</span>
+            <strong>{formatNumber(samples.length)}</strong>
+          </div>
+        </div>
+      </section>
+
       {/* ── Upload section ── */}
-      <section className="card">
-        <h2>Upload a dataset</h2>
-        <p className="muted">
-          Upload a CSV with at least two numeric columns. Non-numeric columns are
-          ignored; rows with missing values are dropped automatically.
-        </p>
+      <section className="card upload-card">
+        <div className="section-heading">
+          <div>
+            <p className="eyebrow">Getting started</p>
+            <h2>Upload a dataset</h2>
+            <p className="muted">
+              Upload a CSV with at least two numeric columns. ModelScope will surface
+              issues early, keep ignored columns visible, and help you choose a stronger PCA setup.
+            </p>
+          </div>
+          <div className="tag-list">
+            <span className="tag">CSV only</span>
+            <span className="tag">10 MB max</span>
+          </div>
+        </div>
 
         {uploadError && <div className="alert alert-error">{uploadError}</div>}
         {uploadSuccess && <div className="alert alert-success">{uploadSuccess}</div>}
 
         <form onSubmit={handleUpload} className="upload-form">
-          <input ref={fileRef} type="file" accept=".csv,text/csv" className="file-input" />
+          <label className="file-input">
+            <span className="meta-label">Choose file</span>
+            <input ref={fileRef} type="file" accept=".csv,text/csv" />
+            <small>Best results come from datasets with at least two stable numeric features.</small>
+          </label>
           <button className="btn btn-primary" disabled={uploading}>
-            {uploading ? "Uploading…" : "Upload CSV"}
+            {uploading ? "Uploading…" : "Upload dataset"}
           </button>
         </form>
 
         {samples.length > 0 && (
           <div className="sample-list">
-            <p className="muted">No CSV handy? Start with a sample dataset.</p>
+            <p className="muted">No CSV handy? Start with a sample dataset and get a feel for the workflow.</p>
             <div className="action-btns">
               {samples.map((sample) => (
                 <button
@@ -631,7 +678,13 @@ export default function Projects() {
 
       {/* ── Dataset list ── */}
       <section className="card">
-        <h2>Your datasets</h2>
+        <div className="section-heading">
+          <div>
+            <p className="eyebrow">Dataset library</p>
+            <h2>Your datasets</h2>
+            <p className="muted">Each upload becomes a reusable workspace with reports, PCA runs, guided presets, and deeper analysis panels.</p>
+          </div>
+        </div>
 
         {loadingDatasets ? (
           <p className="muted">Loading…</p>

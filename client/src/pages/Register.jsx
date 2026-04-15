@@ -1,6 +1,7 @@
 import { useState } from "react";
 import { useNavigate, Link } from "react-router-dom";
 import { setToken } from "../App";
+import BrandLockup from "../components/BrandLockup";
 
 const apiBase = import.meta.env.VITE_API_URL || "";
 
@@ -55,10 +56,21 @@ export default function Register() {
   }
 
   return (
-    <main className="app-shell centered">
-      <div className="card form-card">
-        <p className="eyebrow">ModelScope</p>
-        <h2>Create an account</h2>
+    <main className="app-shell auth-shell">
+      <section className="card auth-aside">
+        <p className="eyebrow">New workspace</p>
+        <BrandLockup subtitle="Build a more confident workflow for CSV exploration, cleanup, and PCA storytelling." />
+        <ul className="auth-benefits">
+          <li>Organize datasets and keep track of your analysis choices.</li>
+          <li>Use quality checks and visual comparisons to stay grounded in the data.</li>
+          <li>Move from messy upload to clean insight without losing context.</li>
+        </ul>
+      </section>
+
+      <section className="card form-card auth-form-panel">
+        <p className="eyebrow">Create account</p>
+        <h2>Set up your modeling workspace.</h2>
+        <p className="muted">Create an account to save datasets, compare runs, and keep your exploration history together.</p>
 
         {error && <div className="alert alert-error">{error}</div>}
 
@@ -100,14 +112,14 @@ export default function Register() {
           </label>
 
           <button className="btn btn-primary full-width" disabled={loading}>
-            {loading ? "Creating account…" : "Register"}
+            {loading ? "Creating account…" : "Create account"}
           </button>
         </form>
 
         <p className="form-footer">
           Already have an account? <Link to="/login">Sign in</Link>
         </p>
-      </div>
+      </section>
     </main>
   );
 }

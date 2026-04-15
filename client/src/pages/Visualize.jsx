@@ -130,6 +130,7 @@ export default function Visualize() {
         numericFilterMax,
         clusterFilter,
       });
+      const filteredItemMap = new Map(filteredItems.map((item) => [item.index, item]));
       const points = filteredItems.map((item) => item.coords);
       const is3D = run.nComponents >= 3;
 
@@ -232,11 +233,12 @@ export default function Visualize() {
           plotRef.current.on("plotly_click", (event) => {
             const index = event.points?.[0]?.customdata;
             if (index !== undefined) {
+              const item = filteredItemMap.get(index);
               setSelectedPoint({
                 index,
-                coords: points[index],
-                metadata: run.rowMetadata?.[index] ?? null,
-                cluster: clusterData?.labels?.[index],
+                coords: item?.coords ?? [],
+                metadata: item?.metadata ?? run.rowMetadata?.[index] ?? null,
+                cluster: item?.cluster ?? clusterData?.labels?.[index],
               });
             }
           });
@@ -473,7 +475,7 @@ export default function Visualize() {
   }
 
   return (
-    <main className="app-shell">
+    <main className="app-shell workspace-shell">
       <section className="card viz-header">
         <div>
           <Link to="/projects" className="back-link">Back to projects</Link>

@@ -1,6 +1,7 @@
 import { useState } from "react";
 import { useNavigate, Link } from "react-router-dom";
 import { setToken } from "../App";
+import BrandLockup from "../components/BrandLockup";
 
 const apiBase = import.meta.env.VITE_API_URL || "";
 
@@ -41,10 +42,21 @@ export default function Login() {
   }
 
   return (
-    <main className="app-shell centered">
-      <div className="card form-card">
-        <p className="eyebrow">ModelScope</p>
-        <h2>Sign in</h2>
+    <main className="app-shell auth-shell">
+      <section className="card auth-aside">
+        <p className="eyebrow">Welcome back</p>
+        <BrandLockup subtitle="A calmer place to upload CSVs, tune PCA, and compare what changed." />
+        <ul className="auth-benefits">
+          <li>See data quality issues before they derail your analysis.</li>
+          <li>Use guided PCA presets instead of starting from a blank slate.</li>
+          <li>Compare runs side-by-side when you want to understand tradeoffs.</li>
+        </ul>
+      </section>
+
+      <section className="card form-card auth-form-panel">
+        <p className="eyebrow">Sign in</p>
+        <h2>Pick up where you left off.</h2>
+        <p className="muted">Your datasets, presets, and PCA runs will be ready when you return.</p>
 
         {error && <div className="alert alert-error">{error}</div>}
 
@@ -79,9 +91,9 @@ export default function Login() {
         </form>
 
         <p className="form-footer">
-          No account? <Link to="/register">Register</Link>
+          No account? <Link to="/register">Create one</Link>
         </p>
-      </div>
+      </section>
     </main>
   );
 }

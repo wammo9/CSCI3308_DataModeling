@@ -257,7 +257,7 @@ export default function Compare() {
   );
 
   return (
-    <main className="app-shell compare-shell">
+    <main className="app-shell workspace-shell compare-shell">
       <section className="card compare-hero">
         <div>
           <p className="eyebrow">Comparison dashboard</p>
