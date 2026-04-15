@@ -88,8 +88,10 @@ function Home() {
         <ul>
           <li>Upload CSV datasets with quantitative columns</li>
           <li>Automatically detects numeric features and removes invalid rows</li>
+          <li>Suggests cleanup steps and recommended PCA presets before you run analysis</li>
           <li>Runs PCA and reduces to 2 or 3 principal components</li>
           <li>Displays an interactive 3-D scatter plot with explained variance</li>
+          <li>Compares PCA runs side-by-side so you can judge preprocessing choices</li>
         </ul>
       </section>
     </main>

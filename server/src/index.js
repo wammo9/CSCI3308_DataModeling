@@ -19,10 +19,12 @@
  * GET    /api/datasets/:id/preview   first 10 rows of dataset   [auth]
  * PATCH  /api/datasets/:id           rename / add notes         [auth]
  * GET    /api/datasets/:id/quality   dataset quality report     [auth]
+ * GET    /api/datasets/:id/assistant data-cleaning suggestions  [auth]
  * GET    /api/datasets/:id/analysis  numeric analysis data      [auth]
  * GET    /api/datasets/:id/report    download analysis report   [auth]
  * DELETE /api/datasets/:id           delete dataset + PCA runs  [auth]
  * POST   /api/datasets/:id/pca      run PCA on a dataset       [auth]
+ * GET    /api/datasets/:id/pca/compare compare two PCA runs     [auth]
  * GET    /api/datasets/:id/pca      list PCA runs for dataset   [auth]
  * GET    /api/pca/:id               fetch a single PCA result   [auth]
  * GET    /api/pca/:id/clusters      k-means clusters for run    [auth]
@@ -179,6 +181,29 @@ function buildQualityReport(records, allColumns, quantitativeColumns, cleanRows)
   };
 }
 
+function fallbackQualityReportFromDataset(ds) {
+  const quantitativeColumns = ds.quantitative_columns ?? [];
+  const allColumns = ds.all_columns ?? [];
+  const rowCount = ds.row_count ?? 0;
+  return {
+    rows: { total: rowCount, usableForPca: rowCount, droppedForPca: 0 },
+    columns: {
+      total: ds.column_count ?? allColumns.length,
+      quantitative: quantitativeColumns.length,
+      ignored: Math.max(0, allColumns.length - quantitativeColumns.length),
+    },
+    numericColumns: [],
+    ignoredColumns: allColumns
+      .filter((col) => !quantitativeColumns.includes(col))
+      .map((name) => ({ name, missingCount: null, numericLikeCount: null })),
+    warnings: [],
+    validForPca: quantitativeColumns.length >= 2 && rowCount >= 2,
+    validationMessage: quantitativeColumns.length >= 2 && rowCount >= 2
+      ? `Dataset is valid for PCA: ${rowCount} usable rows and ${quantitativeColumns.length} numeric columns.`
+      : 'Dataset is invalid for PCA because it needs at least 2 usable rows and 2 numeric columns.',
+  };
+}
+
 function detectCategoricalColumns(records, allColumns, quantitativeColumns) {
   return allColumns.filter((col) => {
     if (quantitativeColumns.includes(col)) return false;
@@ -234,6 +259,146 @@ function buildDatasetInsights(qualityReport, analysis) {
   }
 
   return insights;
+}
+
+function looksLikeOutlierColumn(summary) {
+  if (!summary || !Number.isFinite(summary.stdDev) || summary.stdDev <= 0) return false;
+  const highTail = Number.isFinite(summary.max) && Math.abs(summary.max - summary.mean) > 3 * summary.stdDev;
+  const lowTail = Number.isFinite(summary.min) && Math.abs(summary.mean - summary.min) > 3 * summary.stdDev;
+  return highTail || lowTail;
+}
+
+function shouldScaleFeatures(numericColumns = []) {
+  const ranges = numericColumns
+    .map((col) => Number(col.max) - Number(col.min))
+    .filter((range) => Number.isFinite(range) && range > 0);
+  if (ranges.length < 2) return true;
+  return Math.max(...ranges) / Math.max(Math.min(...ranges), 1e-9) >= 10;
+}
+
+function recommendMissingValueStrategy(qualityReport) {
+  if ((qualityReport.rows?.droppedForPca ?? 0) <= 0) return 'drop';
+  const hasPotentialOutliers = (qualityReport.numericColumns ?? []).some(looksLikeOutlierColumn);
+  return hasPotentialOutliers ? 'median' : 'mean';
+}
+
+function buildCleaningAssistant(ds) {
+  const qualityReport = ds.quality_report ?? fallbackQualityReportFromDataset(ds);
+  const numericColumns = qualityReport.numericColumns ?? [];
+  const quantitativeColumns = ds.quantitative_columns ?? [];
+  const categoricalColumns = ds.categorical_columns ?? [];
+  const totalRows = qualityReport.rows?.total ?? ds.row_count ?? 0;
+  const droppedRows = qualityReport.rows?.droppedForPca ?? 0;
+  const constantColumns = numericColumns.filter((col) => col.isConstant).map((col) => col.name);
+  const mixedColumns = (qualityReport.ignoredColumns ?? [])
+    .filter((col) => Number(col.numericLikeCount) > 0 && (Number(col.numericLikeCount) + Number(col.missingCount || 0)) < totalRows)
+    .map((col) => col.name);
+  const outlierColumns = numericColumns.filter(looksLikeOutlierColumn).map((col) => col.name);
+  const missingValueStrategy = recommendMissingValueStrategy(qualityReport);
+  const scale = shouldScaleFeatures(numericColumns);
+  const recommendedNumericColumns = quantitativeColumns.filter((col) => !constantColumns.includes(col));
+  const recommendedCategoricalColumns = categoricalColumns.slice(0, 2);
+  const recommendedOutlierMethod = outlierColumns.length > 0 ? 'iqr' : 'none';
+  const recommendedFeatureCount = recommendedNumericColumns.length + recommendedCategoricalColumns.length;
+  const recommendedComponents = recommendedFeatureCount >= 3 ? 3 : 2;
+  const actions = [];
+  const takeaways = [];
+
+  if (droppedRows > 0) {
+    const suggestion = missingValueStrategy === 'median' ? 'fill with the median' : 'fill with the mean';
+    actions.push({
+      type: 'missing-values',
+      priority: 'high',
+      title: 'Recover rows lost to missing numeric values',
+      description: `${droppedRows} row${droppedRows === 1 ? '' : 's'} are excluded from PCA right now because at least one numeric value is missing or invalid.`,
+      recommendation: `Try changing the missing-value strategy to ${suggestion} so more rows can stay in the analysis.`,
+      settingsHint: `Missing values: ${missingValueStrategy === 'median' ? 'Fill with median' : 'Fill with mean'}`,
+    });
+    takeaways.push(`${droppedRows} row${droppedRows === 1 ? '' : 's'} could potentially be recovered by imputing missing numeric values.`);
+  }
+
+  if (constantColumns.length > 0) {
+    actions.push({
+      type: 'constant-columns',
+      priority: 'medium',
+      title: 'Remove constant features',
+      description: `${constantColumns.join(', ')} ${constantColumns.length === 1 ? 'does' : 'do'} not change across usable rows, so ${constantColumns.length === 1 ? 'it adds' : 'they add'} noise without improving PCA.`,
+      recommendation: 'Keep automatic constant-column removal enabled before running PCA.',
+      settingsHint: 'Remove constant columns: On',
+    });
+    takeaways.push(`Constant feature${constantColumns.length === 1 ? '' : 's'} can be dropped safely before PCA.`);
+  }
+
+  if (mixedColumns.length > 0) {
+    actions.push({
+      type: 'mixed-columns',
+      priority: 'medium',
+      title: 'Normalize mixed-type columns',
+      description: `${mixedColumns.join(', ')} contains a mix of numeric-looking and non-numeric values, so it is currently excluded from PCA.`,
+      recommendation: 'Standardize these values in the source CSV if you want them treated as numeric features.',
+      settingsHint: 'Clean the source column values and re-upload the dataset',
+    });
+    takeaways.push('Some potentially useful columns are being ignored because their values are not consistently numeric.');
+  }
+
+  if (recommendedCategoricalColumns.length > 0) {
+    actions.push({
+      type: 'categorical-encoding',
+      priority: 'medium',
+      title: 'Encode category labels for richer group separation',
+      description: `Categorical columns such as ${recommendedCategoricalColumns.join(', ')} can be one-hot encoded to help PCA preserve meaningful group labels.`,
+      recommendation: 'Include one or two categorical columns when they represent real segments like species, region, or cohort.',
+      settingsHint: `Categorical columns: ${recommendedCategoricalColumns.join(', ')}`,
+    });
+    takeaways.push('Low-cardinality category labels can add useful structure when you compare groups.');
+  }
+
+  if (outlierColumns.length > 0) {
+    actions.push({
+      type: 'outliers',
+      priority: 'low',
+      title: 'Review possible outlier-heavy features',
+      description: `${outlierColumns.join(', ')} shows unusually wide tails compared with the rest of the numeric distribution.`,
+      recommendation: 'If the PCA plot looks stretched, try the IQR outlier filter and compare the result against the unfiltered run.',
+      settingsHint: 'Outlier rows: Remove by IQR',
+    });
+    takeaways.push('A few extreme values may be driving the shape of the PCA projection.');
+  }
+
+  actions.push({
+    type: 'scaling',
+    priority: scale ? 'medium' : 'low',
+    title: 'Keep features on comparable scales',
+    description: scale
+      ? 'Your numeric features span noticeably different ranges, so scaling will keep larger units from dominating the projection.'
+      : 'Feature ranges are already fairly aligned, but scaling still keeps PCA behavior predictable across uploads.',
+    recommendation: 'Leave scaling enabled unless you intentionally want larger-unit columns to dominate the principal components.',
+    settingsHint: 'Scale features before PCA: On',
+  });
+
+  return {
+    overview: {
+      validForPca: qualityReport.validForPca !== false,
+      usableRows: qualityReport.rows?.usableForPca ?? ds.row_count ?? 0,
+      totalRows,
+      droppedRows,
+      quantitativeColumns: quantitativeColumns.length,
+      categoricalColumns: categoricalColumns.length,
+      ignoredColumns: qualityReport.columns?.ignored ?? 0,
+    },
+    recommendedConfig: {
+      columns: recommendedNumericColumns.length > 0 ? recommendedNumericColumns : quantitativeColumns,
+      categoricalColumns: recommendedCategoricalColumns,
+      nComponents: recommendedComponents,
+      scale,
+      autoDropConstant: true,
+      outlierMethod: recommendedOutlierMethod,
+      zThreshold: 3,
+      missingValueStrategy,
+    },
+    actions,
+    takeaways,
+  };
 }
 
 function buildDatasetFromRecords(records, filename) {
@@ -621,6 +786,98 @@ function uniqueCategoryLevels(records, column) {
     .filter(Boolean))]
     .sort((a, b) => a.localeCompare(b))
     .slice(0, 20);
+}
+
+function sumExplainedVariance(ratios = []) {
+  return ratios.reduce((sum, value) => sum + Number(value || 0), 0);
+}
+
+function topRunContributors(run, componentIndex = 0, limit = 3) {
+  const component = run.loadings?.[componentIndex] ?? [];
+  return component
+    .map((value, index) => ({ name: run.column_names?.[index], value: Number(value) }))
+    .filter((item) => item.name)
+    .sort((a, b) => Math.abs(b.value) - Math.abs(a.value))
+    .slice(0, limit);
+}
+
+function summarizeRunForComparison(run) {
+  return {
+    id: run.id,
+    createdAt: run.created_at,
+    nComponents: run.n_components,
+    nSamples: run.n_samples,
+    totalExplained: sumExplainedVariance(run.explained_variance_ratio),
+    explainedVarianceRatio: run.explained_variance_ratio ?? [],
+    columnNames: run.column_names ?? [],
+    preprocessingOptions: run.preprocessing_options ?? {},
+    preprocessingReport: run.preprocessing_report ?? null,
+    topContributors: topRunContributors(run),
+  };
+}
+
+function buildRunComparison(runA, runB) {
+  const summaryA = summarizeRunForComparison(runA);
+  const summaryB = summarizeRunForComparison(runB);
+  const columnsA = new Set(summaryA.columnNames);
+  const columnsB = new Set(summaryB.columnNames);
+  const sharedColumns = summaryA.columnNames.filter((col) => columnsB.has(col));
+  const onlyInRunA = summaryA.columnNames.filter((col) => !columnsB.has(col));
+  const onlyInRunB = summaryB.columnNames.filter((col) => !columnsA.has(col));
+  const optionLabels = {
+    missingValueStrategy: 'Missing values',
+    outlierMethod: 'Outlier handling',
+    scale: 'Scaling',
+    autoDropConstant: 'Constant-column removal',
+  };
+  const preprocessingDifferences = Object.entries(optionLabels)
+    .filter(([key]) => (summaryA.preprocessingOptions?.[key] ?? null) !== (summaryB.preprocessingOptions?.[key] ?? null))
+    .map(([key, label]) => ({
+      key,
+      label,
+      runA: summaryA.preprocessingOptions?.[key] ?? null,
+      runB: summaryB.preprocessingOptions?.[key] ?? null,
+    }));
+  const takeaways = [];
+  const explainedDelta = Number((summaryB.totalExplained - summaryA.totalExplained).toFixed(4));
+  const sampleDelta = Number(summaryB.nSamples || 0) - Number(summaryA.nSamples || 0);
+
+  if (Math.abs(explainedDelta) >= 0.02) {
+    const betterRun = explainedDelta > 0 ? 'Run B' : 'Run A';
+    takeaways.push(`${betterRun} explains ${Math.abs(explainedDelta * 100).toFixed(1)} percentage points more variance across the selected components.`);
+  }
+  if (sampleDelta !== 0) {
+    const betterRun = sampleDelta > 0 ? 'Run B' : 'Run A';
+    takeaways.push(`${betterRun} keeps ${Math.abs(sampleDelta)} more sample${Math.abs(sampleDelta) === 1 ? '' : 's'} after preprocessing.`);
+  }
+  if (onlyInRunA.length > 0 || onlyInRunB.length > 0) {
+    takeaways.push('The runs use different feature sets, so changes in variance explained may come from both preprocessing and column selection.');
+  }
+  if (preprocessingDifferences.length > 0) {
+    takeaways.push('The preprocessing choices are different enough that this is a meaningful apples-to-apples comparison of PCA setup decisions.');
+  }
+  const topA = summaryA.topContributors[0];
+  const topB = summaryB.topContributors[0];
+  if (topA?.name && topB?.name && topA.name !== topB.name) {
+    takeaways.push(`PC1 is led by ${topA.name} in Run A and ${topB.name} in Run B, which suggests the dominant pattern shifted between runs.`);
+  }
+  if (takeaways.length === 0) {
+    takeaways.push('These runs are very similar on the top-line metrics, so inspect the PCA plots and loadings to decide which setup you prefer.');
+  }
+
+  return {
+    runA: summaryA,
+    runB: summaryB,
+    sharedColumns,
+    onlyInRunA,
+    onlyInRunB,
+    preprocessingDifferences,
+    deltas: {
+      totalExplained: explainedDelta,
+      samples: sampleDelta,
+    },
+    takeaways,
+  };
 }
 
 function validateAndPreprocessForPca(ds, selectedColumns, selectedCategoricalColumns, options) {
@@ -1095,6 +1352,8 @@ app.get('/api/features', (_req, res) => {
     'Upload CSV datasets',
     'Generate automatic data models',
     'Organize saved modeling projects',
+    'Get dataset cleaning suggestions',
+    'Compare PCA runs side-by-side',
   ]);
 });
 
@@ -1303,29 +1562,39 @@ app.get('/api/datasets/:id/quality', requireAuth, async (req, res) => {
       return res.status(404).json({ status: 'error', message: 'Dataset not found' });
     }
     const ds = result.rows[0];
-    const fallbackReport = {
-      rows: { total: ds.row_count, usableForPca: ds.row_count, droppedForPca: 0 },
-      columns: {
-        total: ds.column_count,
-        quantitative: ds.quantitative_columns?.length ?? 0,
-        ignored: Math.max(0, (ds.all_columns?.length ?? 0) - (ds.quantitative_columns?.length ?? 0)),
-      },
-      numericColumns: [],
-      ignoredColumns: (ds.all_columns ?? [])
-        .filter((col) => !(ds.quantitative_columns ?? []).includes(col))
-        .map((name) => ({ name, missingCount: null, numericLikeCount: null })),
-      warnings: [],
-      validForPca: (ds.quantitative_columns?.length ?? 0) >= 2 && ds.row_count >= 2,
-      validationMessage: (ds.quantitative_columns?.length ?? 0) >= 2 && ds.row_count >= 2
-        ? `Dataset is valid for PCA: ${ds.row_count} usable rows and ${ds.quantitative_columns?.length ?? 0} numeric columns.`
-        : 'Dataset is invalid for PCA because it needs at least 2 usable rows and 2 numeric columns.',
-    };
     return res.json({
       status: 'success',
-      qualityReport: ds.quality_report ?? fallbackReport,
+      qualityReport: ds.quality_report ?? fallbackQualityReportFromDataset(ds),
     });
   } catch (err) {
     console.error('Quality report error:', err);
+    return res.status(500).json({ status: 'error', message: 'Server error' });
+  }
+});
+
+app.get('/api/datasets/:id/assistant', requireAuth, async (req, res) => {
+  const datasetId = parseInt(req.params.id, 10);
+  if (isNaN(datasetId)) {
+    return res.status(400).json({ status: 'error', message: 'Invalid dataset id' });
+  }
+
+  try {
+    const uid = await resolveUserId(req);
+    const result = await pool.query(
+      `SELECT row_count, column_count, all_columns, quantitative_columns, categorical_columns, quality_report
+       FROM datasets WHERE id = $1 AND user_id = $2`,
+      [datasetId, uid]
+    );
+    if (!result.rows.length) {
+      return res.status(404).json({ status: 'error', message: 'Dataset not found' });
+    }
+
+    return res.json({
+      status: 'success',
+      assistant: buildCleaningAssistant(result.rows[0]),
+    });
+  } catch (err) {
+    console.error('Cleaning assistant error:', err);
     return res.status(500).json({ status: 'error', message: 'Server error' });
   }
 });
@@ -1661,6 +1930,43 @@ app.post('/api/datasets/:id/pca', requireAuth, async (req, res) => {
   }
 });
 
+app.get('/api/datasets/:id/pca/compare', requireAuth, async (req, res) => {
+  const datasetId = parseInt(req.params.id, 10);
+  const runAId = parseInt(req.query.runA, 10);
+  const runBId = parseInt(req.query.runB, 10);
+  if (isNaN(datasetId)) {
+    return res.status(400).json({ status: 'error', message: 'Invalid dataset id' });
+  }
+  if (isNaN(runAId) || isNaN(runBId) || runAId === runBId) {
+    return res.status(400).json({ status: 'error', message: 'Choose two different PCA run ids to compare' });
+  }
+
+  try {
+    const uid = await resolveUserId(req);
+    const result = await pool.query(
+      `SELECT r.*
+       FROM pca_runs r
+       JOIN datasets d ON d.id = r.dataset_id
+       WHERE r.dataset_id = $1
+         AND r.id = ANY($2::int[])
+         AND d.user_id = $3`,
+      [datasetId, [runAId, runBId], uid]
+    );
+    if (result.rows.length !== 2) {
+      return res.status(404).json({ status: 'error', message: 'One or both PCA runs were not found for this dataset' });
+    }
+
+    const runMap = new Map(result.rows.map((row) => [row.id, row]));
+    return res.json({
+      status: 'success',
+      comparison: buildRunComparison(runMap.get(runAId), runMap.get(runBId)),
+    });
+  } catch (err) {
+    console.error('Compare PCA runs error:', err);
+    return res.status(500).json({ status: 'error', message: 'Server error' });
+  }
+});
+
 // List all PCA runs for a dataset
 app.get('/api/datasets/:id/pca', requireAuth, async (req, res) => {
   const datasetId = parseInt(req.params.id, 10);
@@ -1849,5 +2155,11 @@ if (process.env.NODE_ENV !== 'test') {
       process.exit(1);
     });
 }
+
+export {
+  buildCleaningAssistant,
+  buildRunComparison,
+  fallbackQualityReportFromDataset,
+};
 
 export default app;

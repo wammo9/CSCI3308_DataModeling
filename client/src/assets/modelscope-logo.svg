@@ -1,0 +1,64 @@
+<svg width="512" height="512" viewBox="0 0 512 512" fill="none" xmlns="http://www.w3.org/2000/svg">
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="512" y2="512">
+      <stop stop-color="#122620"/>
+      <stop offset="1" stop-color="#1a3a2e"/>
+    </linearGradient>
+    <linearGradient id="lens" x1="160" y1="140" x2="360" y2="360">
+      <stop stop-color="#63B8A7" stop-opacity="0.15"/>
+      <stop offset="1" stop-color="#F6C453" stop-opacity="0.08"/>
+    </linearGradient>
+    <linearGradient id="gold" x1="0" y1="0" x2="1" y2="1">
+      <stop stop-color="#F6C453"/>
+      <stop offset="1" stop-color="#D4952A"/>
+    </linearGradient>
+    <linearGradient id="teal" x1="0" y1="0" x2="1" y2="1">
+      <stop stop-color="#63B8A7"/>
+      <stop offset="1" stop-color="#3D9B8F"/>
+    </linearGradient>
+  </defs>
+
+  <!-- Rounded square background -->
+  <rect width="512" height="512" rx="96" fill="url(#bg)"/>
+
+  <!-- Lens circle (the "scope") -->
+  <circle cx="244" cy="244" r="148" stroke="#F6F1E9" stroke-width="14" stroke-opacity="0.15" fill="url(#lens)"/>
+
+  <!-- Handle of the scope -->
+  <line x1="348" y1="348" x2="430" y2="430" stroke="#F6F1E9" stroke-width="14" stroke-linecap="round" stroke-opacity="0.15"/>
+
+  <!-- Scatter points inside the lens — 3 clear clusters -->
+  <!-- Cluster A: teal, upper-left -->
+  <circle cx="172" cy="188" r="12" fill="#63B8A7" opacity="0.95"/>
+  <circle cx="192" cy="172" r="9" fill="#63B8A7" opacity="0.8"/>
+  <circle cx="156" cy="208" r="8" fill="#3D9B8F" opacity="0.75"/>
+  <circle cx="184" cy="204" r="10" fill="#63B8A7" opacity="0.85"/>
+  <circle cx="200" cy="192" r="7" fill="#3D9B8F" opacity="0.7"/>
+
+  <!-- Cluster B: gold, center-right -->
+  <circle cx="288" cy="240" r="13" fill="#F6C453" opacity="0.95"/>
+  <circle cx="308" cy="224" r="9" fill="#E8A825" opacity="0.8"/>
+  <circle cx="272" cy="256" r="8" fill="#F6C453" opacity="0.75"/>
+  <circle cx="296" cy="260" r="10" fill="#E8A825" opacity="0.85"/>
+  <circle cx="312" cy="248" r="7" fill="#F6C453" opacity="0.7"/>
+
+  <!-- Cluster C: cream, lower -->
+  <circle cx="220" cy="316" r="11" fill="#F6F1E9" opacity="0.9"/>
+  <circle cx="240" cy="300" r="8" fill="#F3E5AB" opacity="0.8"/>
+  <circle cx="200" cy="304" r="9" fill="#F6F1E9" opacity="0.75"/>
+  <circle cx="236" cy="328" r="7" fill="#F3E5AB" opacity="0.7"/>
+  <circle cx="212" cy="332" r="10" fill="#F6F1E9" opacity="0.8"/>
+
+  <!-- PC1 arrow -->
+  <line x1="120" y1="310" x2="352" y2="170" stroke="url(#gold)" stroke-width="3.5" stroke-linecap="round" opacity="0.6"/>
+  <polygon points="358,166 344,168 348,182" fill="#F6C453" opacity="0.6"/>
+
+  <!-- PC2 arrow -->
+  <line x1="140" y1="170" x2="280" y2="356" stroke="url(#teal)" stroke-width="3.5" stroke-linecap="round" opacity="0.5"/>
+  <polygon points="284,362 278,348 266,356" fill="#63B8A7" opacity="0.5"/>
+
+  <!-- Text: ModelScope -->
+  <text x="256" y="456" text-anchor="middle" fill="#F6F1E9" font-family="'SF Pro Display', 'Helvetica Neue', Arial, sans-serif" font-size="42" font-weight="700" letter-spacing="3" opacity="0.9">
+    <tspan fill="#F6F1E9">Model</tspan><tspan fill="#F6C453">Scope</tspan>
+  </text>
+</svg>

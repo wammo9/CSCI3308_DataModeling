@@ -12,6 +12,56 @@ function pct(ratio) {
   return (ratio * 100).toFixed(1) + "%";
 }
 
+function matchesSearch(metadata, searchTerm, index) {
+  const normalized = searchTerm.trim().toLowerCase();
+  if (!normalized) return true;
+
+  const haystack = [
+    `row ${index + 1}`,
+    ...Object.values(metadata?.labels ?? {}),
+    ...Object.values(metadata?.values ?? {}),
+    ...Object.values(metadata?.numeric ?? {}).filter((value) => value !== null && value !== undefined),
+  ]
+    .map((value) => String(value).toLowerCase())
+    .join(" ");
+
+  return haystack.includes(normalized);
+}
+
+function filterRunItems(run, clusterData, filters) {
+  return (run?.transformedData ?? [])
+    .map((coords, index) => ({
+      index,
+      coords,
+      metadata: run?.rowMetadata?.[index] ?? null,
+      cluster: clusterData?.labels?.[index],
+    }))
+    .filter(({ index, metadata, cluster }) => {
+      if (!matchesSearch(metadata, filters.searchTerm ?? "", index)) return false;
+
+      if (filters.labelFilterColumn && filters.labelFilterValue !== "all") {
+        const label = metadata?.labels?.[filters.labelFilterColumn] || "Unlabeled";
+        if (label !== filters.labelFilterValue) return false;
+      }
+
+      if (filters.clusterFilter !== "all" && String(cluster) !== String(filters.clusterFilter)) {
+        return false;
+      }
+
+      if (filters.numericFilterColumn) {
+        const numericValue = metadata?.numeric?.[filters.numericFilterColumn];
+        if (filters.numericFilterMin !== "" && (!Number.isFinite(Number(numericValue)) || Number(numericValue) < Number(filters.numericFilterMin))) {
+          return false;
+        }
+        if (filters.numericFilterMax !== "" && (!Number.isFinite(Number(numericValue)) || Number(numericValue) > Number(filters.numericFilterMax))) {
+          return false;
+        }
+      }
+
+      return true;
+    });
+}
+
 export default function Visualize() {
   const { runId } = useParams();
   const navigate = useNavigate();
@@ -28,6 +78,13 @@ export default function Visualize() {
   const [loadingsComponent, setLoadingsComponent] = useState(0);
   const [colorBy, setColorBy] = useState("row");
   const [selectedPoint, setSelectedPoint] = useState(null);
+  const [searchTerm, setSearchTerm] = useState("");
+  const [labelFilterColumn, setLabelFilterColumn] = useState("");
+  const [labelFilterValue, setLabelFilterValue] = useState("all");
+  const [numericFilterColumn, setNumericFilterColumn] = useState("");
+  const [numericFilterMin, setNumericFilterMin] = useState("");
+  const [numericFilterMax, setNumericFilterMax] = useState("");
+  const [clusterFilter, setClusterFilter] = useState("all");
 
   useEffect(() => {
     async function load() {
@@ -44,12 +101,36 @@ export default function Visualize() {
     load();
   }, [runId, navigate]);
 
+  useEffect(() => {
+    setSearchTerm("");
+    setLabelFilterColumn("");
+    setLabelFilterValue("all");
+    setNumericFilterColumn("");
+    setNumericFilterMin("");
+    setNumericFilterMax("");
+    setClusterFilter("all");
+    setSelectedPoint(null);
+  }, [runId]);
+
+  useEffect(() => {
+    setLabelFilterValue("all");
+  }, [labelFilterColumn]);
+
   // Render plots once run data is available
   useEffect(() => {
     if (!run || !plotRef.current) return;
 
     import("plotly.js-dist-min").then((Plotly) => {
-      const points = run.transformedData;
+      const filteredItems = filterRunItems(run, clusterData, {
+        searchTerm,
+        labelFilterColumn,
+        labelFilterValue,
+        numericFilterColumn,
+        numericFilterMin,
+        numericFilterMax,
+        clusterFilter,
+      });
+      const points = filteredItems.map((item) => item.coords);
       const is3D = run.nComponents >= 3;
 
       function makeTrace(groupPoints, name, pointIndexes, marker = {}) {
@@ -79,22 +160,23 @@ export default function Visualize() {
       }
 
       // ── Main scatter plot ──
-      const pointIndexes = points.map((_, i) => i);
+      const pointIndexes = filteredItems.map((item) => item.index);
       const labelColumn = colorBy.startsWith("label:") ? colorBy.slice(6) : "";
       const traces = labelColumn
-        ? [...new Set((run.rowMetadata ?? []).map((row) => row.labels?.[labelColumn] || "Unlabeled"))]
+        ? [...new Set(filteredItems.map((item) => item.metadata?.labels?.[labelColumn] || "Unlabeled"))]
             .map((label) => {
-              const grouped = points
-                .map((point, index) => ({ point, index }))
-                .filter(({ index }) => ((run.rowMetadata ?? [])[index]?.labels?.[labelColumn] || "Unlabeled") === label);
+              const grouped = filteredItems
+                .filter((item) => (item.metadata?.labels?.[labelColumn] || "Unlabeled") === label);
               return makeTrace(
-                grouped.map(({ point }) => point),
+                grouped.map((item) => item.coords),
                 label,
-                grouped.map(({ index }) => index),
+                grouped.map((item) => item.index),
               );
             })
         : [makeTrace(points, "", pointIndexes, {
-            color: colorBy === "cluster" && clusterData ? clusterData.labels : pointIndexes,
+            color: colorBy === "cluster" && clusterData
+              ? filteredItems.map((item) => clusterData.labels?.[item.index] ?? 0)
+              : pointIndexes,
             colorscale: colorBy === "cluster" && clusterData ? "Portland" : "Viridis",
           })];
 
@@ -117,6 +199,30 @@ export default function Visualize() {
             paper_bgcolor: "rgba(0,0,0,0)",
             plot_bgcolor: "rgba(255,255,255,0.6)",
           };
+
+      if (plotRef.current?.removeAllListeners) {
+        plotRef.current.removeAllListeners("plotly_click");
+      }
+
+      if (points.length === 0) {
+        Plotly.default.newPlot(plotRef.current, [], {
+          ...layout,
+          annotations: [{
+            text: "No points match the current filters.",
+            x: 0.5,
+            y: 0.5,
+            xref: "paper",
+            yref: "paper",
+            showarrow: false,
+            font: { size: 16, color: "#6b705c" },
+          }],
+        }, {
+          responsive: true,
+          displaylogo: false,
+        });
+        setPlotReady(true);
+        return;
+      }
 
       Plotly.default.newPlot(plotRef.current, traces, layout, {
         responsive: true,
@@ -198,7 +304,45 @@ export default function Visualize() {
 
       setPlotReady(true);
     });
-  }, [run, clusterData, loadingsComponent, colorBy]);
+  }, [
+    run,
+    clusterData,
+    loadingsComponent,
+    colorBy,
+    searchTerm,
+    labelFilterColumn,
+    labelFilterValue,
+    numericFilterColumn,
+    numericFilterMin,
+    numericFilterMax,
+    clusterFilter,
+  ]);
+
+  useEffect(() => {
+    if (!run || !selectedPoint) return;
+    const stillVisible = filterRunItems(run, clusterData, {
+      searchTerm,
+      labelFilterColumn,
+      labelFilterValue,
+      numericFilterColumn,
+      numericFilterMin,
+      numericFilterMax,
+      clusterFilter,
+    }).some((item) => item.index === selectedPoint.index);
+
+    if (!stillVisible) setSelectedPoint(null);
+  }, [
+    run,
+    clusterData,
+    selectedPoint,
+    searchTerm,
+    labelFilterColumn,
+    labelFilterValue,
+    numericFilterColumn,
+    numericFilterMin,
+    numericFilterMax,
+    clusterFilter,
+  ]);
 
   async function handleRunClusters() {
     setClusterLoading(true);
@@ -296,6 +440,27 @@ export default function Visualize() {
   }
 
   const totalPct = run.explainedVarianceRatio.reduce((s, v) => s + v, 0);
+  const filteredItems = filterRunItems(run, clusterData, {
+    searchTerm,
+    labelFilterColumn,
+    labelFilterValue,
+    numericFilterColumn,
+    numericFilterMin,
+    numericFilterMax,
+    clusterFilter,
+  });
+  const labelFilterValues = labelFilterColumn
+    ? [...new Set((run.rowMetadata ?? []).map((row) => row?.labels?.[labelFilterColumn] || "Unlabeled"))]
+    : [];
+  const originalNumericColumns = run.rowMetadata?.[0]?.numeric ? Object.keys(run.rowMetadata[0].numeric) : [];
+  const hasActiveFilters = Boolean(
+    searchTerm.trim() ||
+    labelFilterColumn ||
+    numericFilterColumn ||
+    numericFilterMin !== "" ||
+    numericFilterMax !== "" ||
+    clusterFilter !== "all"
+  );
   const pcaInsights = [
     `The selected components explain ${pct(totalPct)} of the numeric variation in this run.`,
     run.explainedVarianceRatio[0] >= 0.5
@@ -401,6 +566,15 @@ export default function Visualize() {
         <h3>{run.nComponents === 3 ? "3D" : "2D"} PCA scatter plot</h3>
         <div className="analysis-controls">
           <label className="field compact-field">
+            <span>Search rows</span>
+            <input
+              type="search"
+              value={searchTerm}
+              onChange={(e) => setSearchTerm(e.target.value)}
+              placeholder="Label, value, or row number"
+            />
+          </label>
+          <label className="field compact-field">
             <span>Color by</span>
             <select
               value={colorBy}
@@ -416,7 +590,104 @@ export default function Visualize() {
               ))}
             </select>
           </label>
+          {(run.labelColumns ?? []).length > 0 && (
+            <>
+              <label className="field compact-field">
+                <span>Filter label</span>
+                <select
+                  value={labelFilterColumn}
+                  onChange={(e) => setLabelFilterColumn(e.target.value)}
+                >
+                  <option value="">All labels</option>
+                  {(run.labelColumns ?? []).map((col) => (
+                    <option key={col} value={col}>{col}</option>
+                  ))}
+                </select>
+              </label>
+              {labelFilterColumn && (
+                <label className="field compact-field">
+                  <span>Label value</span>
+                  <select
+                    value={labelFilterValue}
+                    onChange={(e) => setLabelFilterValue(e.target.value)}
+                  >
+                    <option value="all">All values</option>
+                    {labelFilterValues.map((value) => (
+                      <option key={value} value={value}>{value}</option>
+                    ))}
+                  </select>
+                </label>
+              )}
+            </>
+          )}
+          {clusterData && (
+            <label className="field compact-field">
+              <span>Cluster filter</span>
+              <select value={clusterFilter} onChange={(e) => setClusterFilter(e.target.value)}>
+                <option value="all">All clusters</option>
+                {clusterData.counts.map((_, index) => (
+                  <option key={index} value={index}>Cluster {index}</option>
+                ))}
+              </select>
+            </label>
+          )}
+          {originalNumericColumns.length > 0 && (
+            <>
+              <label className="field compact-field">
+                <span>Numeric filter</span>
+                <select
+                  value={numericFilterColumn}
+                  onChange={(e) => setNumericFilterColumn(e.target.value)}
+                >
+                  <option value="">No numeric filter</option>
+                  {originalNumericColumns.map((col) => (
+                    <option key={col} value={col}>{col}</option>
+                  ))}
+                </select>
+              </label>
+              {numericFilterColumn && (
+                <>
+                  <label className="field compact-field">
+                    <span>Min</span>
+                    <input
+                      type="number"
+                      value={numericFilterMin}
+                      onChange={(e) => setNumericFilterMin(e.target.value)}
+                      placeholder="Any"
+                    />
+                  </label>
+                  <label className="field compact-field">
+                    <span>Max</span>
+                    <input
+                      type="number"
+                      value={numericFilterMax}
+                      onChange={(e) => setNumericFilterMax(e.target.value)}
+                      placeholder="Any"
+                    />
+                  </label>
+                </>
+              )}
+            </>
+          )}
+          <button
+            className="btn btn-small btn-ghost"
+            disabled={!hasActiveFilters}
+            onClick={() => {
+              setSearchTerm("");
+              setLabelFilterColumn("");
+              setLabelFilterValue("all");
+              setNumericFilterColumn("");
+              setNumericFilterMin("");
+              setNumericFilterMax("");
+              setClusterFilter("all");
+            }}
+          >
+            Clear filters
+          </button>
         </div>
+        <p className="muted">
+          Showing {filteredItems.length} of {run.transformedData.length} points.
+        </p>
         <div ref={plotRef} className="plotly-container" />
         {!plotReady && <p className="muted">Rendering plot…</p>}
         {selectedPoint && (
@@ -474,6 +745,7 @@ export default function Visualize() {
               className="btn btn-small btn-ghost"
               onClick={() => {
                 setClusterData(null);
+                setClusterFilter("all");
                 if (colorBy === "cluster") setColorBy("row");
               }}
             >

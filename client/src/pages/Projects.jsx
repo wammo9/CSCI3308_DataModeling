@@ -17,6 +17,10 @@ function formatNumber(value) {
   return Number(value).toLocaleString(undefined, { maximumFractionDigits: 3 });
 }
 
+function titleCase(value = "") {
+  return value ? value[0].toUpperCase() + value.slice(1) : "";
+}
+
 export default function Projects() {
   const navigate = useNavigate();
   const fileRef = useRef(null);
@@ -45,6 +49,9 @@ export default function Projects() {
   // Quality report state
   const [qualityReports, setQualityReports] = useState({});
   const [qualityLoadingId, setQualityLoadingId] = useState(null);
+  const [openAssistantId, setOpenAssistantId] = useState(null);
+  const [assistantByDataset, setAssistantByDataset] = useState({});
+  const [assistantLoadingId, setAssistantLoadingId] = useState(null);
 
   // PCA options state
   const [configuringId, setConfiguringId] = useState(null);
@@ -384,6 +391,52 @@ export default function Projects() {
     finally { setQualityLoadingId(null); }
   }
 
+  async function handleAssistant(datasetId) {
+    if (openAssistantId === datasetId) {
+      setOpenAssistantId(null);
+      return;
+    }
+
+    setOpenAssistantId(datasetId);
+    if (assistantByDataset[datasetId]) return;
+
+    setAssistantLoadingId(datasetId);
+    try {
+      const res = await fetch(`${apiBase}/api/datasets/${datasetId}/assistant`, {
+        headers: authHeaders(),
+      });
+      const data = await res.json();
+      if (res.ok) {
+        setAssistantByDataset((reports) => ({
+          ...reports,
+          [datasetId]: data.assistant,
+        }));
+      }
+    } catch {
+      alert("Could not reach the server.");
+    } finally {
+      setAssistantLoadingId(null);
+    }
+  }
+
+  function applyAssistantConfig(datasetId) {
+    const assistant = assistantByDataset[datasetId];
+    const dataset = datasets.find((item) => item.id === datasetId);
+    if (!assistant?.recommendedConfig || !dataset) return;
+
+    setConfiguringId(datasetId);
+    setSelectedColumns(assistant.recommendedConfig.columns ?? dataset.quantitative_columns ?? []);
+    setSelectedCategoricalColumns(assistant.recommendedConfig.categoricalColumns ?? []);
+    setComponentCount(assistant.recommendedConfig.nComponents ?? ((assistant.recommendedConfig.columns?.length ?? 0) >= 3 ? 3 : 2));
+    setScaleFeatures(assistant.recommendedConfig.scale !== false);
+    setAutoDropConstant(assistant.recommendedConfig.autoDropConstant !== false);
+    setOutlierMethod(assistant.recommendedConfig.outlierMethod ?? "none");
+    setZThreshold(assistant.recommendedConfig.zThreshold ?? 3);
+    setMissingValueStrategy(assistant.recommendedConfig.missingValueStrategy ?? "drop");
+    setConfigError("");
+    setPreprocessingReport(null);
+  }
+
   async function fetchRuns(datasetId) {
     setRunsLoadingId(datasetId);
     try {
@@ -606,6 +659,8 @@ export default function Projects() {
                   const isConfiguring = configuringId === ds.id;
                   const hasRunHistory = openRunsId === ds.id;
                   const hasAnalysis = openAnalysisId === ds.id;
+                  const hasAssistant = openAssistantId === ds.id;
+                  const assistant = assistantByDataset[ds.id];
                   return (
                     <Fragment key={ds.id}>
                       <tr>
@@ -685,6 +740,13 @@ export default function Projects() {
                               onClick={() => handleQuality(ds.id)}
                             >
                               {reportState?.open ? "Hide quality" : qualityLoadingId === ds.id ? "Loading…" : "Quality"}
+                            </button>
+                            <button
+                              className="btn btn-small btn-ghost"
+                              disabled={assistantLoadingId === ds.id}
+                              onClick={() => handleAssistant(ds.id)}
+                            >
+                              {hasAssistant ? "Hide assistant" : assistantLoadingId === ds.id ? "Loading…" : "Assistant"}
                             </button>
                             <button
                               className="btn btn-small btn-ghost"
@@ -857,6 +919,113 @@ export default function Projects() {
                               >
                                 {runningPCA === ds.id ? "Running…" : "Run configured PCA"}
                               </button>
+                            </div>
+                          </td>
+                        </tr>
+                      )}
+
+                      {hasAssistant && (
+                        <tr className="detail-row">
+                          <td colSpan={6}>
+                            <div className="detail-panel assistant-panel">
+                              <div className="assistant-header">
+                                <div>
+                                  <h3>Cleaning assistant</h3>
+                                  <p className="muted">
+                                    Suggested cleanup steps based on the uploaded dataset profile so you can get to a stronger PCA run faster.
+                                  </p>
+                                </div>
+                                {assistant?.recommendedConfig && (
+                                  <button
+                                    className="btn btn-small btn-primary"
+                                    onClick={() => applyAssistantConfig(ds.id)}
+                                  >
+                                    Apply recommended preset
+                                  </button>
+                                )}
+                              </div>
+
+                              {assistantLoadingId === ds.id && <p className="muted">Loading recommendations…</p>}
+
+                              {assistant && (
+                                <>
+                                  <div className="quality-metrics">
+                                    <div>
+                                      <span className="meta-label">Usable rows</span>
+                                      <strong>{formatNumber(assistant.overview?.usableRows)} of {formatNumber(assistant.overview?.totalRows)}</strong>
+                                    </div>
+                                    <div>
+                                      <span className="meta-label">Rows dropped</span>
+                                      <strong>{formatNumber(assistant.overview?.droppedRows)}</strong>
+                                    </div>
+                                    <div>
+                                      <span className="meta-label">Numeric columns</span>
+                                      <strong>{formatNumber(assistant.overview?.quantitativeColumns)}</strong>
+                                    </div>
+                                    <div>
+                                      <span className="meta-label">Ignored columns</span>
+                                      <strong>{formatNumber(assistant.overview?.ignoredColumns)}</strong>
+                                    </div>
+                                  </div>
+
+                                  {(assistant.takeaways ?? []).length > 0 && (
+                                    <div className="insight-grid">
+                                      {assistant.takeaways.map((takeaway) => (
+                                        <div key={takeaway} className="insight-card">{takeaway}</div>
+                                      ))}
+                                    </div>
+                                  )}
+
+                                  <div className="assistant-actions">
+                                    {(assistant.actions ?? []).map((action) => (
+                                      <div
+                                        key={action.type}
+                                        className={`assistant-card assistant-${action.priority}`}
+                                      >
+                                        <span className="assistant-priority">{titleCase(action.priority)} priority</span>
+                                        <h3>{action.title}</h3>
+                                        <p>{action.description}</p>
+                                        <p className="muted">{action.recommendation}</p>
+                                        {action.settingsHint && (
+                                          <p className="muted">
+                                            Suggested setting: <strong>{action.settingsHint}</strong>
+                                          </p>
+                                        )}
+                                      </div>
+                                    ))}
+                                  </div>
+
+                                  {assistant.recommendedConfig && (
+                                    <div className="validation-card valid assistant-preset">
+                                      <strong>Recommended PCA preset</strong>
+                                      <p>
+                                        {assistant.recommendedConfig.nComponents} components
+                                        {" "}· Missing values: {assistant.recommendedConfig.missingValueStrategy}
+                                        {" "}· Outliers: {assistant.recommendedConfig.outlierMethod}
+                                        {" "}· Scaling: {assistant.recommendedConfig.scale ? "on" : "off"}
+                                      </p>
+                                      <div>
+                                        <span className="meta-label">Numeric features</span>
+                                        <div className="tag-list">
+                                          {(assistant.recommendedConfig.columns ?? []).map((col) => (
+                                            <span key={col} className="tag">{col}</span>
+                                          ))}
+                                        </div>
+                                      </div>
+                                      {(assistant.recommendedConfig.categoricalColumns ?? []).length > 0 && (
+                                        <div>
+                                          <span className="meta-label">Categorical features</span>
+                                          <div className="tag-list">
+                                            {assistant.recommendedConfig.categoricalColumns.map((col) => (
+                                              <span key={col} className="tag">{col}</span>
+                                            ))}
+                                          </div>
+                                        </div>
+                                      )}
+                                    </div>
+                                  )}
+                                </>
+                              )}
                             </div>
                           </td>
                         </tr>

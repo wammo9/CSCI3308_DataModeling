@@ -21,6 +21,18 @@ function datasetTitle(ds) {
   return ds.name || ds.original_filename?.replace(/\.csv$/i, "") || "Dataset";
 }
 
+function formatSettingValue(value) {
+  if (value === true) return "On";
+  if (value === false) return "Off";
+  if (value === "drop") return "Drop rows";
+  if (value === "mean") return "Fill with mean";
+  if (value === "median") return "Fill with median";
+  if (value === "iqr") return "Remove by IQR";
+  if (value === "zscore") return "Remove by z-score";
+  if (value === "none") return "Keep all rows";
+  return value ?? "n/a";
+}
+
 export default function Compare() {
   const navigate = useNavigate();
   const plotRefs = useRef({});
@@ -30,6 +42,9 @@ export default function Compare() {
   const [datasetDetails, setDatasetDetails] = useState({});
   const [selectedRunIds, setSelectedRunIds] = useState([]);
   const [runDetails, setRunDetails] = useState({});
+  const [runComparison, setRunComparison] = useState(null);
+  const [comparisonLoading, setComparisonLoading] = useState(false);
+  const [comparisonError, setComparisonError] = useState("");
   const [loading, setLoading] = useState(true);
   const [detailLoading, setDetailLoading] = useState(false);
   const [error, setError] = useState("");
@@ -123,6 +138,60 @@ export default function Compare() {
 
     loadRuns();
   }, [selectedRunIds]);
+
+  useEffect(() => {
+    async function loadRunComparison() {
+      setComparisonError("");
+      if (selectedRunIds.length !== 2) {
+        setRunComparison(null);
+        setComparisonLoading(false);
+        return;
+      }
+
+      const selectedRuns = datasets.flatMap((ds) =>
+        (datasetDetails[ds.id]?.runs ?? []).map((run) => ({
+          ...run,
+          datasetId: ds.id,
+          datasetName: datasetTitle(ds),
+        }))
+      ).filter((run) => selectedRunIds.includes(run.id));
+
+      if (selectedRuns.length !== 2) {
+        setRunComparison(null);
+        return;
+      }
+      if (selectedRuns[0].datasetId !== selectedRuns[1].datasetId) {
+        setRunComparison(null);
+        setComparisonError("Select two runs from the same dataset to see the detailed run comparison summary.");
+        return;
+      }
+
+      setComparisonLoading(true);
+      try {
+        const res = await fetch(
+          `${apiBase}/api/datasets/${selectedRuns[0].datasetId}/pca/compare?runA=${selectedRuns[0].id}&runB=${selectedRuns[1].id}`,
+          { headers: authHeaders() }
+        );
+        const data = await res.json();
+        if (!res.ok) {
+          setRunComparison(null);
+          setComparisonError(data.message || "Could not compare the selected runs.");
+          return;
+        }
+        setRunComparison({
+          ...data.comparison,
+          datasetName: selectedRuns[0].datasetName,
+        });
+      } catch {
+        setRunComparison(null);
+        setComparisonError("Could not reach the server.");
+      } finally {
+        setComparisonLoading(false);
+      }
+    }
+
+    loadRunComparison();
+  }, [selectedRunIds, datasetDetails, datasets]);
 
   useEffect(() => {
     const runs = Object.values(runDetails);
@@ -325,6 +394,116 @@ export default function Compare() {
               </label>
             ))}
           </div>
+        </section>
+      )}
+
+      {(selectedRunIds.length > 0 || runComparison || comparisonError) && (
+        <section className="card">
+          <div className="compare-summary-header">
+            <div>
+              <h3>Run comparison summary</h3>
+              <p className="muted">
+                Select exactly two runs from the same dataset to compare variance explained, preprocessing choices,
+                and feature coverage side-by-side.
+              </p>
+            </div>
+          </div>
+
+          {comparisonLoading ? (
+            <p className="muted">Comparing selected runs...</p>
+          ) : runComparison ? (
+            <>
+              <div className="comparison-grid">
+                {[["Run A", runComparison.runA], ["Run B", runComparison.runB]].map(([label, run]) => (
+                  <article key={label} className="comparison-card compare-run-card">
+                    <div>
+                      <span className="meta-label">{label}</span>
+                      <h3>{runComparison.datasetName}</h3>
+                      <p className="muted">
+                        Run #{run.id} · {new Date(run.createdAt).toLocaleString()}
+                      </p>
+                    </div>
+                    <div className="quality-metrics">
+                      <div>
+                        <span className="meta-label">Variance</span>
+                        <strong>{pct(run.explainedVarianceRatio)}</strong>
+                      </div>
+                      <div>
+                        <span className="meta-label">Samples</span>
+                        <strong>{formatNumber(run.nSamples)}</strong>
+                      </div>
+                      <div>
+                        <span className="meta-label">Components</span>
+                        <strong>{run.nComponents}</strong>
+                      </div>
+                      <div>
+                        <span className="meta-label">Features</span>
+                        <strong>{formatNumber(run.columnNames?.length)}</strong>
+                      </div>
+                    </div>
+                    {run.preprocessingReport?.message && (
+                      <div className="validation-card valid">
+                        <strong>Preprocessing summary</strong>
+                        <p>{run.preprocessingReport.message}</p>
+                      </div>
+                    )}
+                    <div>
+                      <span className="meta-label">Top PC1 contributors</span>
+                      <div className="tag-list">
+                        {(run.topContributors ?? []).map((item) => (
+                          <span key={`${run.id}-${item.name}`} className="tag">
+                            {item.name} ({item.value.toFixed(2)})
+                          </span>
+                        ))}
+                      </div>
+                    </div>
+                  </article>
+                ))}
+              </div>
+
+              {(runComparison.preprocessingDifferences ?? []).length > 0 && (
+                <div className="comparison-notes">
+                  <span className="meta-label">Preprocessing differences</span>
+                  {(runComparison.preprocessingDifferences ?? []).map((item) => (
+                    <p key={item.key}>
+                      <strong>{item.label}:</strong> Run A uses {formatSettingValue(item.runA)} and Run B uses {formatSettingValue(item.runB)}.
+                    </p>
+                  ))}
+                </div>
+              )}
+
+              {(runComparison.onlyInRunA?.length > 0 || runComparison.onlyInRunB?.length > 0) && (
+                <div className="comparison-grid compare-feature-grid">
+                  <div className="comparison-notes">
+                    <span className="meta-label">Only in Run A</span>
+                    <div className="tag-list">
+                      {(runComparison.onlyInRunA ?? []).length > 0 ? runComparison.onlyInRunA.map((col) => (
+                        <span key={`run-a-${col}`} className="tag">{col}</span>
+                      )) : <span className="muted">Same features as Run B.</span>}
+                    </div>
+                  </div>
+                  <div className="comparison-notes">
+                    <span className="meta-label">Only in Run B</span>
+                    <div className="tag-list">
+                      {(runComparison.onlyInRunB ?? []).length > 0 ? runComparison.onlyInRunB.map((col) => (
+                        <span key={`run-b-${col}`} className="tag">{col}</span>
+                      )) : <span className="muted">Same features as Run A.</span>}
+                    </div>
+                  </div>
+                </div>
+              )}
+
+              <div className="insight-grid">
+                {(runComparison.takeaways ?? []).map((item) => (
+                  <div key={item} className="insight-card">{item}</div>
+                ))}
+              </div>
+            </>
+          ) : (
+            <p className="muted">
+              {comparisonError || "Select exactly two runs from the same dataset to unlock the detailed comparison summary."}
+            </p>
+          )}
         </section>
       )}
 

@@ -516,6 +516,59 @@ h3 { font-size: 1.1rem; margin-bottom: 0.75rem; }
 
 .analysis-panel { gap: 1.25rem; }
 
+.assistant-panel { gap: 1.25rem; }
+
+.assistant-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: start;
+  gap: 1rem;
+}
+
+.assistant-actions {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+  gap: 0.85rem;
+}
+
+.assistant-card {
+  display: grid;
+  gap: 0.45rem;
+  padding: 1rem;
+  border-radius: 12px;
+  border: 1px solid #d0dbc8;
+  background: rgba(255, 255, 255, 0.72);
+}
+
+.assistant-card h3,
+.assistant-card p {
+  margin: 0;
+}
+
+.assistant-high {
+  border-color: #d6b25e;
+  background: rgba(255, 247, 220, 0.88);
+}
+
+.assistant-medium {
+  border-color: #a7c7af;
+}
+
+.assistant-low {
+  border-color: #c8d5c0;
+}
+
+.assistant-priority {
+  font-size: 0.75rem;
+  text-transform: uppercase;
+  letter-spacing: 0.08rem;
+  color: #6b705c;
+}
+
+.assistant-preset {
+  gap: 0.75rem;
+}
+
 .analysis-grid {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
@@ -672,6 +725,14 @@ h3 { font-size: 1.1rem; margin-bottom: 0.75rem; }
   align-content: start;
 }
 
+.compare-summary-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: start;
+  gap: 1rem;
+  margin-bottom: 1rem;
+}
+
 .compare-stat {
   margin: 0.3rem 0 0;
 }
@@ -691,6 +752,31 @@ h3 { font-size: 1.1rem; margin-bottom: 0.75rem; }
   background: rgba(255, 255, 255, 0.45);
 }
 
+.compare-run-card {
+  background: rgba(255, 255, 255, 0.46);
+  border: 1px solid #d0dbc8;
+  border-radius: 14px;
+  padding: 1rem;
+}
+
+.comparison-notes {
+  display: grid;
+  gap: 0.45rem;
+  padding: 1rem;
+  border-radius: 12px;
+  border: 1px solid #d0dbc8;
+  background: rgba(255, 255, 255, 0.62);
+}
+
+.comparison-notes p {
+  margin: 0;
+  font-size: 0.92rem;
+}
+
+.compare-feature-grid {
+  margin-top: 1rem;
+}
+
 /* ── Responsive ────────────────────────────────────────────────────────────── */
 
 @media (min-width: 768px) {
@@ -700,7 +786,9 @@ h3 { font-size: 1.1rem; margin-bottom: 0.75rem; }
 
 @media (max-width: 720px) {
   .compare-hero,
-  .run-card-header {
+  .run-card-header,
+  .assistant-header,
+  .compare-summary-header {
     align-items: stretch;
     flex-direction: column;
   }
