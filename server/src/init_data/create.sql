@@ -22,6 +22,10 @@ CREATE TABLE datasets (
     original_filename     VARCHAR(255) NOT NULL,
     name                  TEXT,
     notes                 TEXT         DEFAULT '',
+    saved_presets         JSONB        DEFAULT '[]'::jsonb,
+    version_group_id      INTEGER,
+    previous_version_id   INTEGER,
+    version_number        INTEGER      DEFAULT 1,
     row_count             INTEGER,
     column_count          INTEGER,
     quantitative_columns  TEXT[],
@@ -40,6 +44,8 @@ CREATE TABLE datasets (
 CREATE TABLE pca_runs (
     id                       SERIAL PRIMARY KEY,
     dataset_id               INTEGER      REFERENCES datasets(id) ON DELETE CASCADE,
+    notes                    TEXT         DEFAULT '',
+    is_pinned                BOOLEAN      DEFAULT FALSE,
     n_components             INTEGER      NOT NULL,
     explained_variance_ratio JSONB,
     all_explained_variance   JSONB,
@@ -49,6 +55,7 @@ CREATE TABLE pca_runs (
     n_samples                INTEGER,
     preprocessing_options    JSONB,
     preprocessing_report     JSONB,
+    preprocessing_diff       JSONB,
     row_indexes              JSONB,
     created_at               TIMESTAMPTZ  DEFAULT NOW()
 );

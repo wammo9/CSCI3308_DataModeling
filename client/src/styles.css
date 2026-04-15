@@ -705,7 +705,7 @@ h3 {
 
 .upload-form {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) auto;
+  grid-template-columns: minmax(0, 1fr) minmax(220px, 0.48fr) auto;
   gap: 1rem;
   align-items: end;
 }
@@ -918,6 +918,22 @@ h3 {
 .correlation-list {
   display: grid;
   gap: 0.85rem;
+}
+
+.preset-toolbar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: end;
+  gap: 0.85rem;
+}
+
+.preset-toolbar .field {
+  flex: 1 1 240px;
+}
+
+.preset-panel,
+.preview-panel {
+  background: rgba(255, 255, 255, 0.72);
 }
 
 .run-item {

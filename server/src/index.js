@@ -16,6 +16,10 @@
  * GET    /api/samples                list sample datasets       [auth]
  * POST   /api/samples/:id            add a sample dataset       [auth]
  * POST   /api/datasets/upload        upload + parse a CSV       [auth]
+ * GET    /api/datasets/:id/versions  list dataset versions      [auth]
+ * GET    /api/datasets/:id/presets   list saved PCA presets     [auth]
+ * POST   /api/datasets/:id/presets   save a PCA preset          [auth]
+ * DELETE /api/datasets/:id/presets/:presetId delete a PCA preset [auth]
  * GET    /api/datasets/:id/preview   first 10 rows of dataset   [auth]
  * PATCH  /api/datasets/:id           rename / add notes         [auth]
  * GET    /api/datasets/:id/quality   dataset quality report     [auth]
@@ -23,10 +27,12 @@
  * GET    /api/datasets/:id/analysis  numeric analysis data      [auth]
  * GET    /api/datasets/:id/report    download analysis report   [auth]
  * DELETE /api/datasets/:id           delete dataset + PCA runs  [auth]
+ * POST   /api/datasets/:id/pca/preview preview PCA preprocessing [auth]
  * POST   /api/datasets/:id/pca      run PCA on a dataset       [auth]
  * GET    /api/datasets/:id/pca/compare compare two PCA runs     [auth]
  * GET    /api/datasets/:id/pca      list PCA runs for dataset   [auth]
  * GET    /api/pca/:id               fetch a single PCA result   [auth]
+ * PATCH  /api/pca/:id               update run notes / pin      [auth]
  * GET    /api/pca/:id/clusters      k-means clusters for run    [auth]
  * GET    /api/pca/:id/report        download PCA report         [auth]
  * GET    /api/pca/:id/export        download transformed CSV    [auth]
@@ -91,10 +97,22 @@ async function ensureSchema() {
   await pool.query('ALTER TABLE datasets ADD COLUMN IF NOT EXISTS categorical_columns TEXT[]');
   await pool.query('ALTER TABLE datasets ADD COLUMN IF NOT EXISTS row_metadata JSONB');
   await pool.query('ALTER TABLE datasets ADD COLUMN IF NOT EXISTS all_records JSONB');
+  await pool.query('ALTER TABLE datasets ADD COLUMN IF NOT EXISTS saved_presets JSONB DEFAULT \'[]\'::jsonb');
+  await pool.query('ALTER TABLE datasets ADD COLUMN IF NOT EXISTS version_group_id INTEGER');
+  await pool.query('ALTER TABLE datasets ADD COLUMN IF NOT EXISTS previous_version_id INTEGER');
+  await pool.query('ALTER TABLE datasets ADD COLUMN IF NOT EXISTS version_number INTEGER DEFAULT 1');
   await pool.query('ALTER TABLE pca_runs ADD COLUMN IF NOT EXISTS loadings JSONB');
   await pool.query('ALTER TABLE pca_runs ADD COLUMN IF NOT EXISTS preprocessing_options JSONB');
   await pool.query('ALTER TABLE pca_runs ADD COLUMN IF NOT EXISTS preprocessing_report JSONB');
+  await pool.query('ALTER TABLE pca_runs ADD COLUMN IF NOT EXISTS preprocessing_diff JSONB');
   await pool.query('ALTER TABLE pca_runs ADD COLUMN IF NOT EXISTS row_indexes JSONB');
+  await pool.query('ALTER TABLE pca_runs ADD COLUMN IF NOT EXISTS notes TEXT DEFAULT \'\'');
+  await pool.query('ALTER TABLE pca_runs ADD COLUMN IF NOT EXISTS is_pinned BOOLEAN DEFAULT FALSE');
+  await pool.query('UPDATE datasets SET saved_presets = \'[]\'::jsonb WHERE saved_presets IS NULL');
+  await pool.query('UPDATE datasets SET version_number = 1 WHERE version_number IS NULL');
+  await pool.query('UPDATE datasets SET version_group_id = id WHERE version_group_id IS NULL');
+  await pool.query('UPDATE pca_runs SET notes = \'\' WHERE notes IS NULL');
+  await pool.query('UPDATE pca_runs SET is_pinned = FALSE WHERE is_pinned IS NULL');
 }
 
 function isNumericValue(value) {
@@ -448,19 +466,25 @@ function buildDatasetFromRecords(records, filename) {
   };
 }
 
-async function saveDataset(uid, dataset, name, notes = '') {
+async function saveDataset(uid, dataset, name, notes = '', options = {}) {
+  const versionGroupId = options.versionGroupId ?? null;
+  const previousVersionId = options.previousVersionId ?? null;
+  const versionNumber = options.versionNumber ?? 1;
   const result = await pool.query(
     `INSERT INTO datasets
-       (user_id, original_filename, name, notes, row_count, column_count,
+       (user_id, original_filename, name, notes, saved_presets, version_group_id, previous_version_id, version_number, row_count, column_count,
         quantitative_columns, categorical_columns, all_columns, raw_data,
         preview_data, row_metadata, quality_report, all_records)
-     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)
-     RETURNING id`,
+     VALUES ($1, $2, $3, $4, '[]'::jsonb, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17)
+     RETURNING id, version_group_id`,
     [
       uid,
       dataset.filename,
       name,
       notes,
+      versionGroupId,
+      previousVersionId,
+      versionNumber,
       dataset.rowCount,
       dataset.columnCount,
       dataset.quantColumns,
@@ -473,16 +497,27 @@ async function saveDataset(uid, dataset, name, notes = '') {
       JSON.stringify(dataset.records),
     ]
   );
+  const insertedId = result.rows[0].id;
+
+  if (!versionGroupId) {
+    await pool.query(
+      'UPDATE datasets SET version_group_id = $1 WHERE id = $1',
+      [insertedId]
+    );
+  }
 
   return {
     status: 'success',
-    datasetId: result.rows[0].id,
+    datasetId: insertedId,
     filename: dataset.filename,
     rowCount: dataset.rowCount,
     columnCount: dataset.columnCount,
     quantitativeColumns: dataset.quantColumns,
     categoricalColumns: dataset.categoricalColumns,
     qualityReport: dataset.qualityReport,
+    versionNumber,
+    versionGroupId: versionGroupId ?? insertedId,
+    previousVersionId,
   };
 }
 
@@ -721,6 +756,195 @@ function normalizePreprocessingOptions(body = {}) {
     outlierMethod,
     zThreshold,
     missingValueStrategy,
+  };
+}
+
+function resolvePcaSelections(ds, body = {}) {
+  const availableColumns = ds.quantitative_columns ?? [];
+  const availableCategoricalColumns = ds.categorical_columns ?? [];
+  const requestedColumns = Array.isArray(body.columns)
+    ? [...new Set(body.columns.map(String).map((col) => col.trim()).filter(Boolean))]
+    : null;
+  const requestedCategoricalColumns = Array.isArray(body.categoricalColumns)
+    ? [...new Set(body.categoricalColumns.map(String).map((col) => col.trim()).filter(Boolean))]
+    : [];
+  const selectedColumns = requestedColumns !== null ? requestedColumns : availableColumns;
+  const selectedCategoricalColumns = requestedCategoricalColumns;
+  const invalidColumns = selectedColumns.filter((col) => !availableColumns.includes(col));
+  const invalidCategoricalColumns = selectedCategoricalColumns.filter((col) => !availableCategoricalColumns.includes(col));
+
+  return {
+    availableColumns,
+    availableCategoricalColumns,
+    selectedColumns,
+    selectedCategoricalColumns,
+    invalidColumns,
+    invalidCategoricalColumns,
+  };
+}
+
+function resolveComponentCount(featureCount, requestedCount) {
+  let nComponents = featureCount >= 3 ? 3 : 2;
+  if (requestedCount !== undefined) {
+    const requestedComponents = Number(requestedCount);
+    if (![2, 3].includes(requestedComponents)) {
+      return { error: 'Number of PCA components must be 2 or 3.' };
+    }
+    nComponents = requestedComponents;
+  }
+  return { nComponents };
+}
+
+function buildPreprocessingDiff(ds, preprocessing, preprocessingOptions) {
+  const report = preprocessing.report ?? {};
+  const rows = report.rows ?? {};
+  const columns = report.columns ?? {};
+  const selectedNumeric = columns.selected ?? [];
+  const encodedCategorical = columns.encodedCategorical ?? [];
+  const removedConstant = columns.removedConstant ?? [];
+  const beforeRows = ds.row_count ?? rows.input ?? 0;
+  const afterRows = rows.used ?? beforeRows;
+  const beforeFeatureCount = selectedNumeric.length + encodedCategorical.length;
+  const afterFeatureCount = (columns.used ?? preprocessing.columnNames ?? []).length;
+  const takeaways = [];
+
+  if ((rows.imputedValues ?? 0) > 0) {
+    takeaways.push(`${rows.imputedValues} value${rows.imputedValues === 1 ? '' : 's'} were filled using the ${preprocessingOptions.missingValueStrategy}.`);
+  }
+  if ((rows.droppedInvalid ?? 0) > 0) {
+    takeaways.push(`${rows.droppedInvalid} row${rows.droppedInvalid === 1 ? '' : 's'} were removed because selected numeric values were missing or invalid.`);
+  }
+  if ((rows.droppedOutliers ?? 0) > 0) {
+    takeaways.push(`${rows.droppedOutliers} outlier row${rows.droppedOutliers === 1 ? '' : 's'} were filtered before PCA.`);
+  }
+  if (removedConstant.length > 0) {
+    takeaways.push(`Constant feature${removedConstant.length === 1 ? '' : 's'} were removed: ${removedConstant.join(', ')}.`);
+  }
+  if (encodedCategorical.length > 0) {
+    takeaways.push(`Categorical columns were encoded before PCA: ${encodedCategorical.join(', ')}.`);
+  }
+
+  return {
+    summary: {
+      startingRows: beforeRows,
+      usableRows: afterRows,
+      retainedRowsPct: beforeRows > 0 ? Number(((afterRows / beforeRows) * 100).toFixed(1)) : 0,
+      selectedNumericColumns: selectedNumeric.length,
+      selectedCategoricalColumns: encodedCategorical.length,
+      outputFeatureCount: afterFeatureCount,
+      featureDelta: afterFeatureCount - beforeFeatureCount,
+    },
+    before: {
+      rows: beforeRows,
+      numericColumns: selectedNumeric,
+      categoricalColumns: encodedCategorical,
+    },
+    after: {
+      rows: afterRows,
+      featureNames: columns.used ?? preprocessing.columnNames ?? [],
+      removedConstant,
+    },
+    takeaways,
+  };
+}
+
+function buildPcaPreview(ds, body = {}) {
+  const {
+    selectedColumns,
+    selectedCategoricalColumns,
+    invalidColumns,
+    invalidCategoricalColumns,
+  } = resolvePcaSelections(ds, body);
+
+  if (invalidColumns.length > 0) {
+    return {
+      error: `Unknown numeric column${invalidColumns.length === 1 ? '' : 's'}: ${invalidColumns.join(', ')}`,
+      statusCode: 400,
+    };
+  }
+  if (invalidCategoricalColumns.length > 0) {
+    return {
+      error: `Unknown categorical column${invalidCategoricalColumns.length === 1 ? '' : 's'}: ${invalidCategoricalColumns.join(', ')}`,
+      statusCode: 400,
+    };
+  }
+  if (selectedColumns.length === 0 && selectedCategoricalColumns.length === 0) {
+    return {
+      error: 'Choose at least one numeric or categorical feature for PCA.',
+      statusCode: 400,
+    };
+  }
+
+  const preprocessingOptions = normalizePreprocessingOptions(body);
+  const preprocessing = validateAndPreprocessForPca(
+    ds,
+    selectedColumns,
+    selectedCategoricalColumns,
+    preprocessingOptions
+  );
+  const preprocessingDiff = buildPreprocessingDiff(ds, preprocessing, preprocessingOptions);
+  const componentResolution = resolveComponentCount(preprocessing.columnNames.length, body?.nComponents);
+  if (componentResolution.error) {
+    return { error: componentResolution.error, statusCode: 400 };
+  }
+
+  let pcaPreview = null;
+  if (preprocessing.report.valid) {
+    try {
+      const result = runPCA(preprocessing.matrix, componentResolution.nComponents, { scale: preprocessingOptions.scale });
+      pcaPreview = {
+        nComponents: result.nComponents,
+        explainedVarianceRatio: result.explainedVarianceRatio,
+        totalExplained: result.totalExplained,
+        nSamples: result.nSamples,
+      };
+    } catch (err) {
+      return {
+        error: err.message,
+        statusCode: 400,
+        preprocessing,
+        preprocessingOptions,
+        preprocessingDiff,
+      };
+    }
+  }
+
+  return {
+    preprocessing,
+    preprocessingOptions,
+    preprocessingDiff,
+    pcaPreview,
+  };
+}
+
+function normalizePresetConfig(ds, body = {}) {
+  const {
+    selectedColumns,
+    selectedCategoricalColumns,
+    invalidColumns,
+    invalidCategoricalColumns,
+  } = resolvePcaSelections(ds, body);
+  if (invalidColumns.length > 0) {
+    return { error: `Unknown numeric column${invalidColumns.length === 1 ? '' : 's'}: ${invalidColumns.join(', ')}` };
+  }
+  if (invalidCategoricalColumns.length > 0) {
+    return { error: `Unknown categorical column${invalidCategoricalColumns.length === 1 ? '' : 's'}: ${invalidCategoricalColumns.join(', ')}` };
+  }
+  if (selectedColumns.length === 0 && selectedCategoricalColumns.length === 0) {
+    return { error: 'Choose at least one numeric or categorical feature for the preset.' };
+  }
+
+  const options = normalizePreprocessingOptions(body);
+  const componentResolution = resolveComponentCount(selectedColumns.length + selectedCategoricalColumns.length, body?.nComponents);
+  if (componentResolution.error) return { error: componentResolution.error };
+
+  return {
+    config: {
+      columns: selectedColumns,
+      categoricalColumns: selectedCategoricalColumns,
+      nComponents: componentResolution.nComponents,
+      ...options,
+    },
   };
 }
 
@@ -1431,7 +1655,8 @@ app.get('/api/datasets', requireAuth, async (req, res) => {
     const uid = await resolveUserId(req);
     const result = await pool.query(
       `SELECT id, original_filename, name, notes, row_count, column_count,
-              quantitative_columns, categorical_columns, all_columns, upload_timestamp
+              quantitative_columns, categorical_columns, all_columns, upload_timestamp,
+              version_group_id, previous_version_id, version_number
        FROM datasets
        WHERE user_id = $1
        ORDER BY upload_timestamp DESC`,
@@ -1440,6 +1665,146 @@ app.get('/api/datasets', requireAuth, async (req, res) => {
     return res.json({ status: 'success', datasets: result.rows });
   } catch (err) {
     console.error('List datasets error:', err);
+    return res.status(500).json({ status: 'error', message: 'Server error' });
+  }
+});
+
+app.get('/api/datasets/:id/versions', requireAuth, async (req, res) => {
+  const datasetId = parseInt(req.params.id, 10);
+  if (isNaN(datasetId)) {
+    return res.status(400).json({ status: 'error', message: 'Invalid dataset id' });
+  }
+
+  try {
+    const uid = await resolveUserId(req);
+    const baseResult = await pool.query(
+      `SELECT id, version_group_id
+       FROM datasets
+       WHERE id = $1 AND user_id = $2`,
+      [datasetId, uid]
+    );
+    if (!baseResult.rows.length) {
+      return res.status(404).json({ status: 'error', message: 'Dataset not found' });
+    }
+
+    const versionGroupId = baseResult.rows[0].version_group_id ?? baseResult.rows[0].id;
+    const result = await pool.query(
+      `SELECT id, original_filename, name, row_count, upload_timestamp, version_number, previous_version_id
+       FROM datasets
+       WHERE user_id = $1 AND COALESCE(version_group_id, id) = $2
+       ORDER BY version_number ASC, upload_timestamp ASC`,
+      [uid, versionGroupId]
+    );
+    return res.json({ status: 'success', versions: result.rows });
+  } catch (err) {
+    console.error('List dataset versions error:', err);
+    return res.status(500).json({ status: 'error', message: 'Server error' });
+  }
+});
+
+app.get('/api/datasets/:id/presets', requireAuth, async (req, res) => {
+  const datasetId = parseInt(req.params.id, 10);
+  if (isNaN(datasetId)) {
+    return res.status(400).json({ status: 'error', message: 'Invalid dataset id' });
+  }
+
+  try {
+    const uid = await resolveUserId(req);
+    const result = await pool.query(
+      `SELECT saved_presets
+       FROM datasets
+       WHERE id = $1 AND user_id = $2`,
+      [datasetId, uid]
+    );
+    if (!result.rows.length) {
+      return res.status(404).json({ status: 'error', message: 'Dataset not found' });
+    }
+    return res.json({ status: 'success', presets: result.rows[0].saved_presets ?? [] });
+  } catch (err) {
+    console.error('List presets error:', err);
+    return res.status(500).json({ status: 'error', message: 'Server error' });
+  }
+});
+
+app.post('/api/datasets/:id/presets', requireAuth, async (req, res) => {
+  const datasetId = parseInt(req.params.id, 10);
+  if (isNaN(datasetId)) {
+    return res.status(400).json({ status: 'error', message: 'Invalid dataset id' });
+  }
+
+  const presetName = String(req.body?.name ?? '').trim();
+  if (!presetName) {
+    return res.status(400).json({ status: 'error', message: 'Preset name is required' });
+  }
+
+  try {
+    const uid = await resolveUserId(req);
+    const dsResult = await pool.query(
+      `SELECT id, quantitative_columns, categorical_columns, saved_presets
+       FROM datasets
+       WHERE id = $1 AND user_id = $2`,
+      [datasetId, uid]
+    );
+    if (!dsResult.rows.length) {
+      return res.status(404).json({ status: 'error', message: 'Dataset not found' });
+    }
+
+    const ds = dsResult.rows[0];
+    const normalized = normalizePresetConfig(ds, req.body?.config ?? req.body ?? {});
+    if (normalized.error) {
+      return res.status(400).json({ status: 'error', message: normalized.error });
+    }
+
+    const presets = ds.saved_presets ?? [];
+    const preset = {
+      id: `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+      name: presetName.slice(0, 80),
+      notes: String(req.body?.notes ?? '').trim().slice(0, 240),
+      config: normalized.config,
+      createdAt: new Date().toISOString(),
+    };
+    const updated = [...presets, preset];
+    await pool.query(
+      'UPDATE datasets SET saved_presets = $1 WHERE id = $2 AND user_id = $3',
+      [JSON.stringify(updated), datasetId, uid]
+    );
+    return res.json({ status: 'success', preset, presets: updated });
+  } catch (err) {
+    console.error('Save preset error:', err);
+    return res.status(500).json({ status: 'error', message: 'Server error' });
+  }
+});
+
+app.delete('/api/datasets/:id/presets/:presetId', requireAuth, async (req, res) => {
+  const datasetId = parseInt(req.params.id, 10);
+  if (isNaN(datasetId)) {
+    return res.status(400).json({ status: 'error', message: 'Invalid dataset id' });
+  }
+
+  try {
+    const uid = await resolveUserId(req);
+    const dsResult = await pool.query(
+      `SELECT saved_presets
+       FROM datasets
+       WHERE id = $1 AND user_id = $2`,
+      [datasetId, uid]
+    );
+    if (!dsResult.rows.length) {
+      return res.status(404).json({ status: 'error', message: 'Dataset not found' });
+    }
+
+    const presets = dsResult.rows[0].saved_presets ?? [];
+    const updated = presets.filter((preset) => preset.id !== req.params.presetId);
+    if (updated.length === presets.length) {
+      return res.status(404).json({ status: 'error', message: 'Preset not found' });
+    }
+    await pool.query(
+      'UPDATE datasets SET saved_presets = $1 WHERE id = $2 AND user_id = $3',
+      [JSON.stringify(updated), datasetId, uid]
+    );
+    return res.json({ status: 'success', presets: updated });
+  } catch (err) {
+    console.error('Delete preset error:', err);
     return res.status(500).json({ status: 'error', message: 'Server error' });
   }
 });
@@ -1499,10 +1864,41 @@ app.post('/api/datasets/upload', requireAuth, upload.single('file'), async (req,
 
   try {
     const uid = await resolveUserId(req);
+    let versionOptions = {};
+    if (req.body?.basedOnDatasetId) {
+      const sourceDatasetId = parseInt(req.body.basedOnDatasetId, 10);
+      if (isNaN(sourceDatasetId)) {
+        return res.status(400).json({ status: 'error', message: 'Invalid source dataset id for versioning' });
+      }
+      const sourceResult = await pool.query(
+        `SELECT id, version_group_id, version_number
+         FROM datasets
+         WHERE id = $1 AND user_id = $2`,
+        [sourceDatasetId, uid]
+      );
+      if (!sourceResult.rows.length) {
+        return res.status(404).json({ status: 'error', message: 'Source dataset for new version was not found' });
+      }
+      const sourceDataset = sourceResult.rows[0];
+      const versionGroupId = sourceDataset.version_group_id ?? sourceDataset.id;
+      const versionCountResult = await pool.query(
+        `SELECT COALESCE(MAX(version_number), 0) AS max_version
+         FROM datasets
+         WHERE user_id = $1 AND COALESCE(version_group_id, id) = $2`,
+        [uid, versionGroupId]
+      );
+      versionOptions = {
+        versionGroupId,
+        previousVersionId: sourceDataset.id,
+        versionNumber: Number(versionCountResult.rows[0]?.max_version || 0) + 1,
+      };
+    }
     const response = await saveDataset(
       uid,
       dataset,
       req.file.originalname.replace(/\.csv$/i, ''),
+      '',
+      versionOptions,
     );
     return res.json(response);
   } catch (err) {
@@ -1790,6 +2186,45 @@ app.patch('/api/datasets/:id', requireAuth, async (req, res) => {
 
 // ── PCA ───────────────────────────────────────────────────────────────────────
 
+app.post('/api/datasets/:id/pca/preview', requireAuth, async (req, res) => {
+  const datasetId = parseInt(req.params.id, 10);
+  if (isNaN(datasetId)) {
+    return res.status(400).json({ status: 'error', message: 'Invalid dataset id' });
+  }
+
+  try {
+    const uid = await resolveUserId(req);
+    const dsResult = await pool.query(
+      'SELECT * FROM datasets WHERE id = $1 AND user_id = $2',
+      [datasetId, uid]
+    );
+    if (!dsResult.rows.length) {
+      return res.status(404).json({ status: 'error', message: 'Dataset not found' });
+    }
+
+    const preview = buildPcaPreview(dsResult.rows[0], req.body ?? {});
+    if (preview.error) {
+      return res.status(preview.statusCode ?? 400).json({
+        status: 'error',
+        message: preview.error,
+        preprocessingReport: preview.preprocessing?.report ?? null,
+        preprocessingDiff: preview.preprocessingDiff ?? null,
+      });
+    }
+
+    return res.json({
+      status: 'success',
+      preprocessingReport: preview.preprocessing.report,
+      preprocessingDiff: preview.preprocessingDiff,
+      preview: preview.pcaPreview,
+      preprocessingOptions: preview.preprocessingOptions,
+    });
+  } catch (err) {
+    console.error('PCA preview error:', err);
+    return res.status(500).json({ status: 'error', message: 'Server error' });
+  }
+});
+
 // Run PCA on a dataset and store the result
 app.post('/api/datasets/:id/pca', requireAuth, async (req, res) => {
   const datasetId = parseInt(req.params.id, 10);
@@ -1808,19 +2243,12 @@ app.post('/api/datasets/:id/pca', requireAuth, async (req, res) => {
     }
 
     const ds = dsResult.rows[0];
-    const availableColumns = ds.quantitative_columns ?? [];
-    const availableCategoricalColumns = ds.categorical_columns ?? [];
-    const requestedColumns = Array.isArray(req.body?.columns)
-      ? [...new Set(req.body.columns.map(String).map((col) => col.trim()).filter(Boolean))]
-      : null;
-    const requestedCategoricalColumns = Array.isArray(req.body?.categoricalColumns)
-      ? [...new Set(req.body.categoricalColumns.map(String).map((col) => col.trim()).filter(Boolean))]
-      : [];
-    const selectedColumns = requestedColumns !== null ? requestedColumns : availableColumns;
-    const selectedCategoricalColumns = requestedCategoricalColumns;
-    const invalidColumns = selectedColumns.filter((col) => !availableColumns.includes(col));
-    const invalidCategoricalColumns = selectedCategoricalColumns.filter((col) => !availableCategoricalColumns.includes(col));
-
+    const {
+      selectedColumns,
+      selectedCategoricalColumns,
+      invalidColumns,
+      invalidCategoricalColumns,
+    } = resolvePcaSelections(ds, req.body ?? {});
     if (invalidColumns.length > 0) {
       return res.status(400).json({
         status: 'error',
@@ -1853,25 +2281,22 @@ app.post('/api/datasets/:id/pca', requireAuth, async (req, res) => {
         status: 'error',
         message: preprocessing.report.message,
         preprocessingReport: preprocessing.report,
+        preprocessingDiff: buildPreprocessingDiff(ds, preprocessing, preprocessingOptions),
       });
     }
 
     const matrix = preprocessing.matrix;
     const pcaColumns = preprocessing.columnNames;
     const nFeatures = pcaColumns.length;
-
-    // Decide on number of output components
-    let nComponents = nFeatures >= 3 ? 3 : 2;
-    if (req.body?.nComponents !== undefined) {
-      const requestedComponents = Number(req.body.nComponents);
-      if (![2, 3].includes(requestedComponents)) {
-        return res.status(400).json({
-          status: 'error',
-          message: 'Number of PCA components must be 2 or 3.',
-        });
-      }
-      nComponents = requestedComponents;
+    const componentResolution = resolveComponentCount(nFeatures, req.body?.nComponents);
+    if (componentResolution.error) {
+      return res.status(400).json({
+        status: 'error',
+        message: componentResolution.error,
+      });
     }
+    const nComponents = componentResolution.nComponents;
+    const preprocessingDiff = buildPreprocessingDiff(ds, preprocessing, preprocessingOptions);
     let pcaResult;
     try {
       pcaResult = runPCA(matrix, nComponents, { scale: preprocessingOptions.scale });
@@ -1885,6 +2310,7 @@ app.post('/api/datasets/:id/pca', requireAuth, async (req, res) => {
           status: 'invalid',
           message: err.message,
         },
+        preprocessingDiff,
       });
     }
 
@@ -1892,8 +2318,8 @@ app.post('/api/datasets/:id/pca', requireAuth, async (req, res) => {
       `INSERT INTO pca_runs
          (dataset_id, n_components, explained_variance_ratio,
           all_explained_variance, loadings, transformed_data, column_names, n_samples,
-          preprocessing_options, preprocessing_report, row_indexes)
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
+          preprocessing_options, preprocessing_report, preprocessing_diff, row_indexes)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
        RETURNING id`,
       [
         datasetId,
@@ -1906,6 +2332,7 @@ app.post('/api/datasets/:id/pca', requireAuth, async (req, res) => {
         pcaResult.nSamples,
         JSON.stringify(preprocessingOptions),
         JSON.stringify(preprocessing.report),
+        JSON.stringify(preprocessingDiff),
         JSON.stringify(preprocessing.rowIndexes),
       ]
     );
@@ -1923,6 +2350,7 @@ app.post('/api/datasets/:id/pca', requireAuth, async (req, res) => {
       filename: ds.original_filename,
       scale: preprocessingOptions.scale,
       preprocessingReport: preprocessing.report,
+      preprocessingDiff,
     });
   } catch (err) {
     console.error('PCA run error:', err);
@@ -1977,11 +2405,11 @@ app.get('/api/datasets/:id/pca', requireAuth, async (req, res) => {
     const uid = await resolveUserId(req);
     const result = await pool.query(
       `SELECT r.id, r.n_components, r.explained_variance_ratio, r.column_names, r.n_samples,
-              r.preprocessing_report, r.created_at
+              r.preprocessing_report, r.preprocessing_diff, r.notes, r.is_pinned, r.created_at
        FROM pca_runs r
        JOIN datasets d ON d.id = r.dataset_id
        WHERE r.dataset_id = $1 AND d.user_id = $2
-       ORDER BY r.created_at DESC`,
+       ORDER BY r.is_pinned DESC, r.created_at DESC`,
       [datasetId, uid]
     );
     return res.json({ status: 'success', runs: result.rows });
@@ -2041,11 +2469,76 @@ app.get('/api/pca/:id', requireAuth, async (req, res) => {
       labelColumns: run.categorical_columns ?? [],
       nSamples: run.n_samples,
       createdAt: run.created_at,
+      notes: run.notes ?? '',
+      isPinned: run.is_pinned === true,
       preprocessingOptions: run.preprocessing_options ?? {},
       preprocessingReport: run.preprocessing_report ?? null,
+      preprocessingDiff: run.preprocessing_diff ?? null,
     });
   } catch (err) {
     console.error('Get PCA run error:', err);
+    return res.status(500).json({ status: 'error', message: 'Server error' });
+  }
+});
+
+app.patch('/api/pca/:id', requireAuth, async (req, res) => {
+  const runId = parseInt(req.params.id, 10);
+  if (isNaN(runId)) {
+    return res.status(400).json({ status: 'error', message: 'Invalid run id' });
+  }
+
+  const { notes, isPinned } = req.body ?? {};
+  if (notes === undefined && isPinned === undefined) {
+    return res.status(400).json({ status: 'error', message: 'Provide notes or pin state to update' });
+  }
+
+  try {
+    const uid = await resolveUserId(req);
+    const runResult = await pool.query(
+      `SELECT r.id, r.dataset_id
+       FROM pca_runs r
+       JOIN datasets d ON d.id = r.dataset_id
+       WHERE r.id = $1 AND d.user_id = $2`,
+      [runId, uid]
+    );
+    if (!runResult.rows.length) {
+      return res.status(404).json({ status: 'error', message: 'PCA run not found' });
+    }
+
+    const datasetId = runResult.rows[0].dataset_id;
+    if (isPinned === true) {
+      await pool.query('UPDATE pca_runs SET is_pinned = FALSE WHERE dataset_id = $1', [datasetId]);
+    }
+
+    const fields = [];
+    const values = [];
+    let idx = 1;
+    if (notes !== undefined) {
+      fields.push(`notes = $${idx++}`);
+      values.push(String(notes).slice(0, 2000));
+    }
+    if (isPinned !== undefined) {
+      fields.push(`is_pinned = $${idx++}`);
+      values.push(Boolean(isPinned));
+    }
+    values.push(runId);
+
+    const result = await pool.query(
+      `UPDATE pca_runs SET ${fields.join(', ')}
+       WHERE id = $${idx}
+       RETURNING id, notes, is_pinned`,
+      values
+    );
+    return res.json({
+      status: 'success',
+      run: {
+        id: result.rows[0].id,
+        notes: result.rows[0].notes ?? '',
+        isPinned: result.rows[0].is_pinned === true,
+      },
+    });
+  } catch (err) {
+    console.error('Patch PCA run error:', err);
     return res.status(500).json({ status: 'error', message: 'Server error' });
   }
 });
@@ -2158,6 +2651,8 @@ if (process.env.NODE_ENV !== 'test') {
 
 export {
   buildCleaningAssistant,
+  buildPcaPreview,
+  buildPreprocessingDiff,
   buildRunComparison,
   fallbackQualityReportFromDataset,
 };

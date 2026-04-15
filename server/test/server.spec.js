@@ -9,7 +9,12 @@
 
 import { strict as assert } from 'assert';
 import request from 'supertest';
-import app, { buildCleaningAssistant, buildRunComparison } from '../src/index.js';
+import app, {
+  buildCleaningAssistant,
+  buildPcaPreview,
+  buildPreprocessingDiff,
+  buildRunComparison,
+} from '../src/index.js';
 
 // Helper: generate a valid JWT for auth-protected route tests
 async function makeToken() {
@@ -126,6 +131,26 @@ describe('Auth-protected routes', () => {
 
   it('GET /api/datasets/1/pca/compare without a token returns 401', async () => {
     const res = await request(app).get('/api/datasets/1/pca/compare?runA=1&runB=2');
+    assert.equal(res.status, 401);
+  });
+
+  it('GET /api/datasets/1/versions without a token returns 401', async () => {
+    const res = await request(app).get('/api/datasets/1/versions');
+    assert.equal(res.status, 401);
+  });
+
+  it('GET /api/datasets/1/presets without a token returns 401', async () => {
+    const res = await request(app).get('/api/datasets/1/presets');
+    assert.equal(res.status, 401);
+  });
+
+  it('POST /api/datasets/1/pca/preview without a token returns 401', async () => {
+    const res = await request(app).post('/api/datasets/1/pca/preview');
+    assert.equal(res.status, 401);
+  });
+
+  it('PATCH /api/pca/1 without a token returns 401', async () => {
+    const res = await request(app).patch('/api/pca/1');
     assert.equal(res.status, 401);
   });
 });
@@ -265,5 +290,63 @@ describe('PCA run comparison summary', () => {
     assert.ok(comparison.preprocessingDifferences.some((item) => item.key === 'missingValueStrategy'));
     assert.ok(comparison.preprocessingDifferences.some((item) => item.key === 'outlierMethod'));
     assert.ok(comparison.takeaways.length >= 3);
+  });
+});
+
+describe('Preprocessing diff summary', () => {
+  it('summarizes before/after row and feature changes', () => {
+    const diff = buildPreprocessingDiff(
+      { row_count: 12 },
+      {
+        columnNames: ['age', 'score', 'group=A', 'group=B'],
+        report: {
+          rows: { input: 12, used: 9, droppedInvalid: 2, droppedOutliers: 1, imputedValues: 3 },
+          columns: {
+            selected: ['age', 'score'],
+            encodedCategorical: ['group'],
+            used: ['age', 'score', 'group=A', 'group=B'],
+            removedConstant: ['constant_col'],
+          },
+        },
+      },
+      { missingValueStrategy: 'mean' }
+    );
+
+    assert.equal(diff.summary.startingRows, 12);
+    assert.equal(diff.summary.usableRows, 9);
+    assert.equal(diff.summary.outputFeatureCount, 4);
+    assert.ok(diff.takeaways.some((item) => item.includes('filled using the mean')));
+    assert.ok(diff.takeaways.some((item) => item.includes('Constant feature')));
+  });
+});
+
+describe('PCA preview builder', () => {
+  it('creates a dry-run preview with preprocessing and variance estimates', () => {
+    const preview = buildPcaPreview(
+      {
+        row_count: 6,
+        quantitative_columns: ['x', 'y', 'z'],
+        categorical_columns: ['group'],
+        all_records: [
+          { x: 1, y: 2, z: 3, group: 'A' },
+          { x: 2, y: 3, z: 4, group: 'A' },
+          { x: 3, y: 4, z: 5, group: 'B' },
+          { x: 4, y: 5, z: 6, group: 'B' },
+          { x: 5, y: 6, z: 7, group: 'C' },
+          { x: 6, y: 7, z: 8, group: 'C' },
+        ],
+      },
+      {
+        columns: ['x', 'y', 'z'],
+        categoricalColumns: ['group'],
+        nComponents: 2,
+        scale: true,
+      }
+    );
+
+    assert.equal(preview.preprocessing.report.valid, true);
+    assert.equal(preview.pcaPreview.nComponents, 2);
+    assert.ok(Array.isArray(preview.pcaPreview.explainedVarianceRatio));
+    assert.ok(preview.preprocessingDiff.summary.outputFeatureCount >= 3);
   });
 });

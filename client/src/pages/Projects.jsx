@@ -21,6 +21,10 @@ function titleCase(value = "") {
   return value ? value[0].toUpperCase() + value.slice(1) : "";
 }
 
+function versionLabel(dataset) {
+  return `v${dataset.version_number || 1}`;
+}
+
 export default function Projects() {
   const navigate = useNavigate();
   const fileRef = useRef(null);
@@ -36,6 +40,7 @@ export default function Projects() {
   const [runningPCA, setRunningPCA] = useState(null);
   const [samples, setSamples] = useState([]);
   const [sampleLoadingId, setSampleLoadingId] = useState(null);
+  const [versionSourceId, setVersionSourceId] = useState("");
 
   // Preview state
   const [preview, setPreview] = useState(null);
@@ -52,6 +57,11 @@ export default function Projects() {
   const [openAssistantId, setOpenAssistantId] = useState(null);
   const [assistantByDataset, setAssistantByDataset] = useState({});
   const [assistantLoadingId, setAssistantLoadingId] = useState(null);
+  const [presetsByDataset, setPresetsByDataset] = useState({});
+  const [presetLoadingId, setPresetLoadingId] = useState(null);
+  const [presetSavingId, setPresetSavingId] = useState(null);
+  const [presetName, setPresetName] = useState("");
+  const [presetError, setPresetError] = useState("");
 
   // PCA options state
   const [configuringId, setConfiguringId] = useState(null);
@@ -65,11 +75,20 @@ export default function Projects() {
   const [missingValueStrategy, setMissingValueStrategy] = useState("drop");
   const [configError, setConfigError] = useState("");
   const [preprocessingReport, setPreprocessingReport] = useState(null);
+  const [previewDiff, setPreviewDiff] = useState(null);
+  const [previewVariance, setPreviewVariance] = useState(null);
+  const [previewLoadingId, setPreviewLoadingId] = useState(null);
 
   // Run history state
   const [openRunsId, setOpenRunsId] = useState(null);
   const [runsByDataset, setRunsByDataset] = useState({});
   const [runsLoadingId, setRunsLoadingId] = useState(null);
+  const [editingRunId, setEditingRunId] = useState(null);
+  const [runNoteDraft, setRunNoteDraft] = useState("");
+  const [savingRunMetaId, setSavingRunMetaId] = useState(null);
+  const [openVersionsId, setOpenVersionsId] = useState(null);
+  const [versionsByDataset, setVersionsByDataset] = useState({});
+  const [versionsLoadingId, setVersionsLoadingId] = useState(null);
 
   // Dataset analysis state
   const [openAnalysisId, setOpenAnalysisId] = useState(null);
@@ -241,6 +260,7 @@ export default function Projects() {
 
     const formData = new FormData();
     formData.append("file", file);
+    if (versionSourceId) formData.append("basedOnDatasetId", versionSourceId);
 
     setUploading(true);
     try {
@@ -254,9 +274,10 @@ export default function Projects() {
         setUploadError(data.message || "Upload failed");
       } else {
         setUploadSuccess(
-          `"${data.filename}" uploaded — ${data.rowCount} rows, ${data.quantitativeColumns.length} numeric columns.`
+          `"${data.filename}" uploaded — ${data.rowCount} rows, ${data.quantitativeColumns.length} numeric columns${data.versionNumber ? ` · ${versionSourceId ? `saved as version ${data.versionNumber}` : ""}` : ""}.`
         );
         fileRef.current.value = "";
+        setVersionSourceId("");
         fetchDatasets();
       }
     } catch { setUploadError("Could not reach the server."); }
@@ -297,6 +318,11 @@ export default function Projects() {
     setMissingValueStrategy("drop");
     setConfigError("");
     setPreprocessingReport(null);
+    setPreviewDiff(null);
+    setPreviewVariance(null);
+    setPresetName("");
+    setPresetError("");
+    fetchPresets(ds.id);
   }
 
   function toggleSelectedColumn(column) {
@@ -339,6 +365,7 @@ export default function Projects() {
       if (!res.ok) {
         setConfigError(data.message || "PCA failed");
         setPreprocessingReport(data.preprocessingReport ?? null);
+        setPreviewDiff(data.preprocessingDiff ?? null);
       } else {
         navigate(`/visualize/${data.runId}`);
       }
@@ -435,6 +462,138 @@ export default function Projects() {
     setMissingValueStrategy(assistant.recommendedConfig.missingValueStrategy ?? "drop");
     setConfigError("");
     setPreprocessingReport(null);
+    setPreviewDiff(null);
+    setPreviewVariance(null);
+  }
+
+  function applyPreset(config) {
+    setSelectedColumns(config.columns ?? []);
+    setSelectedCategoricalColumns(config.categoricalColumns ?? []);
+    setComponentCount(config.nComponents ?? 3);
+    setScaleFeatures(config.scale !== false);
+    setAutoDropConstant(config.autoDropConstant !== false);
+    setOutlierMethod(config.outlierMethod ?? "none");
+    setZThreshold(config.zThreshold ?? 3);
+    setMissingValueStrategy(config.missingValueStrategy ?? "drop");
+    setConfigError("");
+    setPreprocessingReport(null);
+    setPreviewDiff(null);
+    setPreviewVariance(null);
+  }
+
+  async function fetchPresets(datasetId) {
+    setPresetLoadingId(datasetId);
+    try {
+      const res = await fetch(`${apiBase}/api/datasets/${datasetId}/presets`, {
+        headers: authHeaders(),
+      });
+      const data = await res.json();
+      if (res.ok) {
+        setPresetsByDataset((current) => ({ ...current, [datasetId]: data.presets ?? [] }));
+      }
+    } catch {
+      // ignore preset loading failures until the user interacts
+    } finally {
+      setPresetLoadingId(null);
+    }
+  }
+
+  async function handleSavePreset(datasetId) {
+    setPresetError("");
+    if (!presetName.trim()) {
+      setPresetError("Give the preset a short name so you can reuse it later.");
+      return;
+    }
+
+    setPresetSavingId(datasetId);
+    try {
+      const res = await fetch(`${apiBase}/api/datasets/${datasetId}/presets`, {
+        method: "POST",
+        headers: { ...authHeaders(), "Content-Type": "application/json" },
+        body: JSON.stringify({
+          name: presetName.trim(),
+          config: {
+            columns: selectedColumns,
+            categoricalColumns: selectedCategoricalColumns,
+            nComponents: componentCount,
+            scale: scaleFeatures,
+            autoDropConstant,
+            outlierMethod,
+            zThreshold,
+            missingValueStrategy,
+          },
+        }),
+      });
+      const data = await res.json();
+      if (!res.ok) {
+        setPresetError(data.message || "Could not save preset.");
+      } else {
+        setPresetsByDataset((current) => ({ ...current, [datasetId]: data.presets ?? [] }));
+        setPresetName("");
+      }
+    } catch {
+      setPresetError("Could not reach the server.");
+    } finally {
+      setPresetSavingId(null);
+    }
+  }
+
+  async function handleDeletePreset(datasetId, presetId) {
+    try {
+      const res = await fetch(`${apiBase}/api/datasets/${datasetId}/presets/${presetId}`, {
+        method: "DELETE",
+        headers: authHeaders(),
+      });
+      const data = await res.json();
+      if (res.ok) {
+        setPresetsByDataset((current) => ({ ...current, [datasetId]: data.presets ?? [] }));
+      }
+    } catch {
+      alert("Could not reach the server.");
+    }
+  }
+
+  async function handlePreviewOutcome(datasetId) {
+    setConfigError("");
+    setPreprocessingReport(null);
+    setPreviewDiff(null);
+    setPreviewVariance(null);
+    if (selectedColumns.length === 0 && selectedCategoricalColumns.length === 0) {
+      setConfigError("Choose at least one numeric or categorical feature.");
+      return;
+    }
+
+    setPreviewLoadingId(datasetId);
+    try {
+      const res = await fetch(`${apiBase}/api/datasets/${datasetId}/pca/preview`, {
+        method: "POST",
+        headers: { ...authHeaders(), "Content-Type": "application/json" },
+        body: JSON.stringify({
+          columns: selectedColumns,
+          categoricalColumns: selectedCategoricalColumns,
+          nComponents: componentCount,
+          scale: scaleFeatures,
+          autoDropConstant,
+          outlierMethod,
+          zThreshold,
+          missingValueStrategy,
+        }),
+      });
+      const data = await res.json();
+      if (!res.ok) {
+        setConfigError(data.message || "Could not preview this PCA setup.");
+        setPreprocessingReport(data.preprocessingReport ?? null);
+        setPreviewDiff(data.preprocessingDiff ?? null);
+      } else {
+        setPreprocessingReport(data.preprocessingReport ?? null);
+        setPreviewDiff(data.preprocessingDiff ?? null);
+        setPreviewVariance(data.preview ?? null);
+      }
+    } catch {
+      setConfigError("Could not reach the server.");
+    } finally {
+      setPreviewLoadingId(null);
+    }
   }
 
   async function fetchRuns(datasetId) {
@@ -472,6 +631,68 @@ export default function Projects() {
         fetchRuns(datasetId);
       }
     } catch { alert("Could not reach the server."); }
+  }
+
+  async function handleSaveRunMeta(runId, datasetId, updates) {
+    setSavingRunMetaId(runId);
+    try {
+      const res = await fetch(`${apiBase}/api/pca/${runId}`, {
+        method: "PATCH",
+        headers: { ...authHeaders(), "Content-Type": "application/json" },
+        body: JSON.stringify(updates),
+      });
+      const data = await res.json();
+      if (res.ok) {
+        setRunsByDataset((current) => ({
+          ...current,
+          [datasetId]: (current[datasetId] ?? []).map((run) =>
+            run.id === runId
+              ? {
+                  ...run,
+                  notes: data.run?.notes ?? run.notes,
+                  is_pinned: data.run?.isPinned ?? run.is_pinned,
+                }
+              : updates.isPinned === true
+                ? { ...run, is_pinned: false }
+                : run
+          ).sort((a, b) => Number(b.is_pinned === true) - Number(a.is_pinned === true) || new Date(b.created_at) - new Date(a.created_at)),
+        }));
+        if (updates.notes !== undefined) {
+          setEditingRunId(null);
+          setRunNoteDraft("");
+        }
+      }
+    } catch {
+      alert("Could not reach the server.");
+    } finally {
+      setSavingRunMetaId(null);
+    }
+  }
+
+  async function fetchVersions(datasetId) {
+    setVersionsLoadingId(datasetId);
+    try {
+      const res = await fetch(`${apiBase}/api/datasets/${datasetId}/versions`, {
+        headers: authHeaders(),
+      });
+      const data = await res.json();
+      if (res.ok) {
+        setVersionsByDataset((current) => ({ ...current, [datasetId]: data.versions ?? [] }));
+      }
+    } catch {
+      // ignore until user asks again
+    } finally {
+      setVersionsLoadingId(null);
+    }
+  }
+
+  function handleVersions(datasetId) {
+    if (openVersionsId === datasetId) {
+      setOpenVersionsId(null);
+      return;
+    }
+    setOpenVersionsId(datasetId);
+    fetchVersions(datasetId);
   }
 
   async function handleAnalysis(datasetId) {
@@ -652,8 +873,19 @@ export default function Projects() {
             <input ref={fileRef} type="file" accept=".csv,text/csv" />
             <small>Best results come from datasets with at least two stable numeric features.</small>
           </label>
+          <label className="field compact-field">
+            <span>Upload mode</span>
+            <select value={versionSourceId} onChange={(e) => setVersionSourceId(e.target.value)}>
+              <option value="">Create a new dataset</option>
+              {datasets.map((dataset) => (
+                <option key={dataset.id} value={dataset.id}>
+                  {dataset.name || dataset.original_filename.replace(/\.csv$/i, "")} · {versionLabel(dataset)}
+                </option>
+              ))}
+            </select>
+          </label>
           <button className="btn btn-primary" disabled={uploading}>
-            {uploading ? "Uploading…" : "Upload dataset"}
+            {uploading ? "Uploading…" : versionSourceId ? "Upload new version" : "Upload dataset"}
           </button>
         </form>
 
@@ -745,6 +977,10 @@ export default function Projects() {
                               <span className="filename">
                                 {ds.name || ds.original_filename.replace(/\.csv$/i, "")}
                               </span>
+                              <div className="tag-list">
+                                <span className="tag">{versionLabel(ds)}</span>
+                                {ds.previous_version_id && <span className="tag">Versioned dataset</span>}
+                              </div>
                               {ds.notes && <p className="ds-notes">{ds.notes}</p>}
                             </div>
                           )}
@@ -782,6 +1018,12 @@ export default function Projects() {
                             </button>
                             <button
                               className="btn btn-small btn-ghost"
+                              onClick={() => handleVersions(ds.id)}
+                            >
+                              {openVersionsId === ds.id ? "Hide versions" : "Versions"}
+                            </button>
+                            <button
+                              className="btn btn-small btn-ghost"
                               disabled={previewLoading && preview?.datasetId !== ds.id}
                               onClick={() => handlePreview(ds.id)}
                             >
@@ -816,6 +1058,15 @@ export default function Projects() {
                             </button>
                             <button className="btn btn-small btn-ghost" onClick={() => startEditing(ds)}>
                               Edit
+                            </button>
+                            <button
+                              className="btn btn-small btn-ghost"
+                              onClick={() => {
+                                setVersionSourceId(String(ds.id));
+                                window.scrollTo({ top: 0, behavior: "smooth" });
+                              }}
+                            >
+                              New version
                             </button>
                             <button
                               className="btn btn-small btn-danger"
@@ -861,6 +1112,65 @@ export default function Projects() {
                                   )}
                                 </div>
                               )}
+
+                              <div className="detail-panel preset-panel">
+                                <div className="section-heading">
+                                  <div>
+                                    <h3>Saved presets</h3>
+                                    <p className="muted">Capture a configuration you trust, then reapply it later instead of rebuilding the setup by hand.</p>
+                                  </div>
+                                </div>
+                                {presetError && <div className="alert alert-error">{presetError}</div>}
+                                <div className="preset-toolbar">
+                                  <label className="field compact-field">
+                                    <span>Preset name</span>
+                                    <input
+                                      type="text"
+                                      value={presetName}
+                                      onChange={(e) => setPresetName(e.target.value)}
+                                      placeholder="Example: Clean baseline"
+                                    />
+                                  </label>
+                                  <button
+                                    className="btn btn-small btn-ghost"
+                                    disabled={presetSavingId === ds.id}
+                                    onClick={() => handleSavePreset(ds.id)}
+                                  >
+                                    {presetSavingId === ds.id ? "Saving…" : "Save current preset"}
+                                  </button>
+                                </div>
+                                {presetLoadingId === ds.id ? (
+                                  <p className="muted">Loading presets…</p>
+                                ) : (presetsByDataset[ds.id] ?? []).length === 0 ? (
+                                  <p className="muted">No saved presets yet. Save a strong setup so you can reuse it later.</p>
+                                ) : (
+                                  <div className="assistant-actions">
+                                    {(presetsByDataset[ds.id] ?? []).map((preset) => (
+                                      <div key={preset.id} className="assistant-card assistant-low">
+                                        <span className="assistant-priority">Saved preset</span>
+                                        <h3>{preset.name}</h3>
+                                        <p className="muted">
+                                          {preset.config.nComponents} components · Missing values: {preset.config.missingValueStrategy}
+                                          {" "}· Outliers: {preset.config.outlierMethod}
+                                        </p>
+                                        <div className="tag-list">
+                                          {(preset.config.columns ?? []).map((col) => (
+                                            <span key={`${preset.id}-${col}`} className="tag">{col}</span>
+                                          ))}
+                                        </div>
+                                        <div className="action-btns">
+                                          <button className="btn btn-small btn-primary" onClick={() => applyPreset(preset.config)}>
+                                            Apply
+                                          </button>
+                                          <button className="btn btn-small btn-ghost" onClick={() => handleDeletePreset(ds.id, preset.id)}>
+                                            Delete
+                                          </button>
+                                        </div>
+                                      </div>
+                                    ))}
+                                  </div>
+                                )}
+                              </div>
 
                               <div>
                                 <span className="meta-label">Numeric features</span>
@@ -966,12 +1276,105 @@ export default function Projects() {
                               </div>
 
                               <button
+                                className="btn btn-small btn-ghost"
+                                disabled={previewLoadingId === ds.id}
+                                onClick={() => handlePreviewOutcome(ds.id)}
+                              >
+                                {previewLoadingId === ds.id ? "Previewing…" : "Preview outcome"}
+                              </button>
+                              <button
                                 className="btn btn-small btn-primary"
                                 disabled={runningPCA === ds.id}
                                 onClick={() => handleConfiguredPCA(ds.id)}
                               >
                                 {runningPCA === ds.id ? "Running…" : "Run configured PCA"}
                               </button>
+
+                              {(previewDiff || previewVariance) && (
+                                <div className="detail-panel preview-panel">
+                                  <div>
+                                    <h3>Pre-run preview</h3>
+                                    <p className="muted">A dry run of the current configuration before you commit this PCA run.</p>
+                                  </div>
+                                  {previewDiff?.summary && (
+                                    <div className="quality-metrics">
+                                      <div>
+                                        <span className="meta-label">Rows kept</span>
+                                        <strong>{formatNumber(previewDiff.summary.usableRows)} of {formatNumber(previewDiff.summary.startingRows)}</strong>
+                                      </div>
+                                      <div>
+                                        <span className="meta-label">Retention</span>
+                                        <strong>{formatNumber(previewDiff.summary.retainedRowsPct)}%</strong>
+                                      </div>
+                                      <div>
+                                        <span className="meta-label">Output features</span>
+                                        <strong>{formatNumber(previewDiff.summary.outputFeatureCount)}</strong>
+                                      </div>
+                                      <div>
+                                        <span className="meta-label">Feature delta</span>
+                                        <strong>{formatNumber(previewDiff.summary.featureDelta)}</strong>
+                                      </div>
+                                    </div>
+                                  )}
+                                  {previewVariance && (
+                                    <div className="validation-card valid">
+                                      <strong>Estimated PCA outcome</strong>
+                                      <p>
+                                        {previewVariance.nComponents} components would explain about{" "}
+                                        {pct(previewVariance.explainedVarianceRatio)} of the variance across{" "}
+                                        {formatNumber(previewVariance.nSamples)} rows.
+                                      </p>
+                                    </div>
+                                  )}
+                                  {(previewDiff?.takeaways ?? []).length > 0 && (
+                                    <div className="insight-grid">
+                                      {previewDiff.takeaways.map((takeaway) => (
+                                        <div key={takeaway} className="insight-card">{takeaway}</div>
+                                      ))}
+                                    </div>
+                                  )}
+                                </div>
+                              )}
+                            </div>
+                          </td>
+                        </tr>
+                      )}
+
+                      {openVersionsId === ds.id && (
+                        <tr className="detail-row">
+                          <td colSpan={6}>
+                            <div className="detail-panel">
+                              <h3>Dataset versions</h3>
+                              {versionsLoadingId === ds.id ? (
+                                <p className="muted">Loading versions…</p>
+                              ) : (versionsByDataset[ds.id] ?? []).length === 0 ? (
+                                <p className="muted">No version history available yet.</p>
+                              ) : (
+                                <div className="run-list">
+                                  {(versionsByDataset[ds.id] ?? []).map((version) => (
+                                    <div key={version.id} className="run-item">
+                                      <div>
+                                        <strong>{version.name || version.original_filename.replace(/\.csv$/i, "")}</strong>
+                                        <p className="muted">
+                                          {versionLabel(version)} · {formatNumber(version.row_count)} rows · {new Date(version.upload_timestamp).toLocaleString()}
+                                        </p>
+                                      </div>
+                                      <div className="action-btns">
+                                        {version.id === ds.id && <span className="tag">Current</span>}
+                                        <button
+                                          className="btn btn-small btn-ghost"
+                                          onClick={() => {
+                                            setVersionSourceId(String(version.id));
+                                            window.scrollTo({ top: 0, behavior: "smooth" });
+                                          }}
+                                        >
+                                          Upload next version
+                                        </button>
+                                      </div>
+                                    </div>
+                                  ))}
+                                </div>
+                              )}
                             </div>
                           </td>
                         </tr>
@@ -1098,6 +1501,10 @@ export default function Projects() {
                                   {runs.map((run) => (
                                     <div key={run.id} className="run-item">
                                       <div>
+                                        <div className="tag-list">
+                                          {run.is_pinned && <span className="tag">Pinned</span>}
+                                          <span className="tag">{run.n_components} components</span>
+                                        </div>
                                         <strong>{run.n_components} components</strong>
                                         <p className="muted">
                                           {pct(run.explained_variance_ratio)} variance, {run.n_samples} samples,
@@ -1105,6 +1512,45 @@ export default function Projects() {
                                         </p>
                                         {run.preprocessing_report?.message && (
                                           <p className="muted">{run.preprocessing_report.message}</p>
+                                        )}
+                                        {run.preprocessing_diff?.summary && (
+                                          <p className="muted">
+                                            Rows kept: {formatNumber(run.preprocessing_diff.summary.usableRows)} of {formatNumber(run.preprocessing_diff.summary.startingRows)}
+                                            {" "}· Output features: {formatNumber(run.preprocessing_diff.summary.outputFeatureCount)}
+                                          </p>
+                                        )}
+                                        {editingRunId === run.id ? (
+                                          <div className="edit-inline">
+                                            <textarea
+                                              className="edit-textarea"
+                                              rows={3}
+                                              value={runNoteDraft}
+                                              onChange={(e) => setRunNoteDraft(e.target.value)}
+                                              placeholder="Summarize what made this run useful."
+                                            />
+                                            <div className="edit-actions">
+                                              <button
+                                                className="btn btn-small btn-primary"
+                                                disabled={savingRunMetaId === run.id}
+                                                onClick={() => handleSaveRunMeta(run.id, ds.id, { notes: runNoteDraft })}
+                                              >
+                                                {savingRunMetaId === run.id ? "Saving…" : "Save note"}
+                                              </button>
+                                              <button
+                                                className="btn btn-small btn-ghost"
+                                                onClick={() => {
+                                                  setEditingRunId(null);
+                                                  setRunNoteDraft("");
+                                                }}
+                                              >
+                                                Cancel
+                                              </button>
+                                            </div>
+                                          </div>
+                                        ) : run.notes ? (
+                                          <p className="ds-notes">{run.notes}</p>
+                                        ) : (
+                                          <p className="muted">No run notes yet.</p>
                                         )}
                                         <div className="tag-list">
                                           {(run.column_names ?? []).map((col) => (
@@ -1116,6 +1562,22 @@ export default function Projects() {
                                         <Link className="btn btn-small btn-primary" to={`/visualize/${run.id}`}>
                                           Open
                                         </Link>
+                                        <button
+                                          className="btn btn-small btn-ghost"
+                                          disabled={savingRunMetaId === run.id}
+                                          onClick={() => handleSaveRunMeta(run.id, ds.id, { isPinned: !run.is_pinned })}
+                                        >
+                                          {run.is_pinned ? "Unpin" : "Pin"}
+                                        </button>
+                                        <button
+                                          className="btn btn-small btn-ghost"
+                                          onClick={() => {
+                                            setEditingRunId(run.id);
+                                            setRunNoteDraft(run.notes || "");
+                                          }}
+                                        >
+                                          {run.notes ? "Edit note" : "Add note"}
+                                        </button>
                                         <button
                                           className="btn btn-small btn-danger"
                                           onClick={() => handleDeleteRun(run.id, ds.id)}

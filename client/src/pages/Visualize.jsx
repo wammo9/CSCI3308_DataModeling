@@ -480,6 +480,11 @@ export default function Visualize() {
         <div>
           <Link to="/projects" className="back-link">Back to projects</Link>
           <h2>{run.filename}</h2>
+          <div className="tag-list">
+            {run.isPinned && <span className="tag">Pinned run</span>}
+            {run.notes && <span className="tag">Has notes</span>}
+          </div>
+          {run.notes && <p className="muted">{run.notes}</p>}
         </div>
 
         <div className="viz-meta">
@@ -539,6 +544,19 @@ export default function Visualize() {
               <p className="muted">
                 Constant columns removed: {run.preprocessingReport.columns.removedConstant.join(", ")}
               </p>
+            )}
+          </div>
+        )}
+
+        {run.preprocessingDiff?.summary && (
+          <div className="validation-card valid">
+            <strong>Before and after preprocessing</strong>
+            <p>
+              {run.preprocessingDiff.summary.usableRows} of {run.preprocessingDiff.summary.startingRows} rows were kept,
+              and the feature set changed to {run.preprocessingDiff.summary.outputFeatureCount} PCA-ready columns.
+            </p>
+            {(run.preprocessingDiff.takeaways ?? []).length > 0 && (
+              <p className="muted">{run.preprocessingDiff.takeaways.join(" ")}</p>
             )}
           </div>
         )}
