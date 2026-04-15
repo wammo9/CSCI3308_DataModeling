@@ -1,0 +1,81 @@
+<svg width="512" height="512" viewBox="0 0 512 512" fill="none" xmlns="http://www.w3.org/2000/svg">
+  <!-- Direction 5: Aperture — Camera/scope aperture blades framing clustered data -->
+  <defs>
+    <linearGradient id="d5-blade1" x1="180" y1="100" x2="280" y2="300" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#1B3A36"/>
+      <stop offset="1" stop-color="#2A5C54"/>
+    </linearGradient>
+    <linearGradient id="d5-blade2" x1="200" y1="120" x2="300" y2="320" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#2A5C54"/>
+      <stop offset="1" stop-color="#3A7A6E"/>
+    </linearGradient>
+    <radialGradient id="d5-center" cx="256" cy="240" r="80" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#F7F2EA" stop-opacity="0.95"/>
+      <stop offset="0.7" stop-color="#E8F4F0" stop-opacity="0.6"/>
+      <stop offset="1" stop-color="#C5DDD6" stop-opacity="0.3"/>
+    </radialGradient>
+    <clipPath id="d5-aperture">
+      <circle cx="256" cy="240" r="72"/>
+    </clipPath>
+    <filter id="d5-shadow">
+      <feDropShadow dx="0" dy="4" stdDeviation="8" flood-color="#1B3A36" flood-opacity="0.15"/>
+    </filter>
+  </defs>
+
+  <!-- Outer ring -->
+  <circle cx="256" cy="240" r="175" stroke="#1B3A36" stroke-width="4" stroke-opacity="0.08" fill="none"/>
+  <circle cx="256" cy="240" r="155" stroke="#1B3A36" stroke-width="2" stroke-opacity="0.05" fill="none"/>
+
+  <!-- Aperture blades (6 blades) -->
+  <g filter="url(#d5-shadow)">
+    <!-- Blade 1 (top) -->
+    <path d="M256 68 L310 148 L256 168 L202 148 Z" fill="url(#d5-blade1)" opacity="0.88"/>
+    <!-- Blade 2 (top-right) -->
+    <path d="M396 138 L346 228 L296 218 L326 128 Z" fill="url(#d5-blade2)" opacity="0.82"/>
+    <!-- Blade 3 (bottom-right) -->
+    <path d="M396 342 L310 332 L296 262 L366 282 Z" fill="url(#d5-blade1)" opacity="0.78"/>
+    <!-- Blade 4 (bottom) -->
+    <path d="M256 412 L202 332 L256 312 L310 332 Z" fill="url(#d5-blade2)" opacity="0.85"/>
+    <!-- Blade 5 (bottom-left) -->
+    <path d="M116 342 L146 282 L216 262 L206 332 Z" fill="url(#d5-blade1)" opacity="0.8"/>
+    <!-- Blade 6 (top-left) -->
+    <path d="M116 138 L186 128 L216 218 L166 228 Z" fill="url(#d5-blade2)" opacity="0.84"/>
+  </g>
+
+  <!-- Center opening -->
+  <circle cx="256" cy="240" r="72" fill="url(#d5-center)"/>
+
+  <!-- Data clusters visible through aperture -->
+  <g clip-path="url(#d5-aperture)">
+    <!-- Cluster A: teal -->
+    <circle cx="228" cy="218" r="10" fill="#2A8C7A" opacity="0.92"/>
+    <circle cx="240" cy="206" r="7" fill="#3BA08C" opacity="0.8"/>
+    <circle cx="218" cy="230" r="6" fill="#2A8C7A" opacity="0.75"/>
+    <circle cx="244" cy="226" r="8" fill="#3BA08C" opacity="0.85"/>
+
+    <!-- Cluster B: amber -->
+    <circle cx="280" cy="248" r="9" fill="#C88B3C" opacity="0.9"/>
+    <circle cx="292" cy="236" r="6.5" fill="#D4993F" opacity="0.8"/>
+    <circle cx="274" cy="262" r="5.5" fill="#C88B3C" opacity="0.72"/>
+    <circle cx="296" cy="254" r="7" fill="#D4993F" opacity="0.82"/>
+
+    <!-- Cluster C: light sand -->
+    <circle cx="252" cy="274" r="7.5" fill="#E8DAC4" opacity="0.85"/>
+    <circle cx="238" cy="268" r="5.5" fill="#F0E6D4" opacity="0.78"/>
+    <circle cx="264" cy="282" r="5" fill="#E8DAC4" opacity="0.7"/>
+  </g>
+
+  <!-- Subtle crosshair -->
+  <line x1="256" y1="158" x2="256" y2="172" stroke="#1B3A36" stroke-width="1.5" stroke-opacity="0.2" stroke-linecap="round"/>
+  <line x1="256" y1="308" x2="256" y2="322" stroke="#1B3A36" stroke-width="1.5" stroke-opacity="0.2" stroke-linecap="round"/>
+  <line x1="174" y1="240" x2="188" y2="240" stroke="#1B3A36" stroke-width="1.5" stroke-opacity="0.2" stroke-linecap="round"/>
+  <line x1="324" y1="240" x2="338" y2="240" stroke="#1B3A36" stroke-width="1.5" stroke-opacity="0.2" stroke-linecap="round"/>
+
+  <!-- Wordmark -->
+  <text x="256" y="464" text-anchor="middle" fill="#1B3A36" font-family="'SF Pro Display', 'Helvetica Neue', Arial, sans-serif" font-size="40" font-weight="700" letter-spacing="5">
+    <tspan>MODEL</tspan><tspan fill="#C88B3C">SCOPE</tspan>
+  </text>
+  <text x="256" y="490" text-anchor="middle" fill="#6C7B75" font-family="'SF Pro Display', 'Helvetica Neue', Arial, sans-serif" font-size="12" font-weight="500" letter-spacing="7">
+    SEE YOUR DATA CLEARLY
+  </text>
+</svg>

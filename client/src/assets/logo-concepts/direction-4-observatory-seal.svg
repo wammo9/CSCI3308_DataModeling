@@ -1,0 +1,45 @@
+<svg width="512" height="512" viewBox="0 0 512 512" fill="none" xmlns="http://www.w3.org/2000/svg">
+  <defs>
+    <linearGradient id="d4-top" x1="160" y1="110" x2="350" y2="258" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#F4EBDD"/>
+      <stop offset="1" stop-color="#E9D7BF"/>
+    </linearGradient>
+    <linearGradient id="d4-body" x1="132" y1="226" x2="384" y2="384" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#DCC8AA"/>
+      <stop offset="1" stop-color="#BFA47E"/>
+    </linearGradient>
+    <linearGradient id="d4-handle" x1="112" y1="332" x2="206" y2="426" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#86A89A"/>
+      <stop offset="1" stop-color="#5E7F72"/>
+    </linearGradient>
+  </defs>
+
+  <rect width="512" height="512" rx="96" fill="#F5EEE3"/>
+
+  <g opacity="0.95">
+    <ellipse cx="256" cy="190" rx="128" ry="72" fill="url(#d4-top)" stroke="#D1B88F" stroke-width="6"/>
+    <path d="M128 190V288C128 324 185 354 256 354C327 354 384 324 384 288V190" fill="url(#d4-body)"/>
+    <path d="M128 190V288C128 324 185 354 256 354C327 354 384 324 384 288V190" stroke="#C7AE86" stroke-width="6"/>
+    <rect x="116" y="320" width="30" height="126" rx="15" transform="rotate(50 116 320)" fill="url(#d4-handle)"/>
+  </g>
+
+  <ellipse cx="256" cy="190" rx="102" ry="54" fill="#DDECEF"/>
+  <ellipse cx="256" cy="190" rx="102" ry="54" fill="url(#d4-top)" opacity="0.22"/>
+
+  <path d="M206 204L294 170" stroke="#1F3B38" stroke-width="8" stroke-linecap="round"/>
+  <path d="M255 204V145" stroke="#1F3B38" stroke-width="8" stroke-linecap="round"/>
+  <path d="M255 204L332 146" stroke="#1F3B38" stroke-width="8" stroke-linecap="round"/>
+  <path d="M200 206L181 199L198 188" fill="#1F3B38"/>
+  <path d="M255 141L244 160H266L255 141Z" fill="#1F3B38"/>
+  <path d="M338 141L314 146L330 163L338 141Z" fill="#1F3B38"/>
+
+  <circle cx="236" cy="174" r="8" fill="#6E9D85"/>
+  <circle cx="255" cy="166" r="6" fill="#83B094"/>
+  <circle cx="274" cy="177" r="10" fill="#4A7A61"/>
+  <circle cx="222" cy="186" r="5" fill="#83B094"/>
+  <circle cx="244" cy="191" r="7" fill="#6E9D85"/>
+
+  <text x="256" y="452" text-anchor="middle" fill="#243746" font-family="'Avenir Next', 'Helvetica Neue', Arial, sans-serif" font-size="40" font-weight="700" letter-spacing="4">
+    <tspan>MODEL</tspan><tspan fill="#D18A47">SCOPE</tspan>
+  </text>
+</svg>

@@ -1,0 +1,31 @@
+<svg width="512" height="512" viewBox="0 0 512 512" fill="none" xmlns="http://www.w3.org/2000/svg">
+  <defs>
+    <linearGradient id="d3-bg" x1="70" y1="58" x2="428" y2="448" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#11233F"/>
+      <stop offset="1" stop-color="#18325C"/>
+    </linearGradient>
+    <linearGradient id="d3-stroke" x1="150" y1="136" x2="350" y2="336" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#91D1FF"/>
+      <stop offset="1" stop-color="#4A7BFF"/>
+    </linearGradient>
+    <linearGradient id="d3-ring" x1="128" y1="126" x2="384" y2="384" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#8FD3FF" stop-opacity="0.95"/>
+      <stop offset="1" stop-color="#6B7CFF" stop-opacity="0.82"/>
+    </linearGradient>
+  </defs>
+
+  <rect x="36" y="36" width="440" height="440" rx="104" fill="url(#d3-bg)"/>
+  <circle cx="256" cy="222" r="124" stroke="url(#d3-ring)" stroke-width="14" stroke-opacity="0.5"/>
+  <circle cx="256" cy="222" r="96" stroke="#F4F7FB" stroke-width="1.5" stroke-opacity="0.1"/>
+
+  <path d="M150 300V144L206 228L256 158L306 228L362 144V300" stroke="url(#d3-stroke)" stroke-width="20" stroke-linecap="round" stroke-linejoin="round"/>
+  <path d="M320 140C275 140 252 161 252 191C252 220 277 237 308 247C335 255 352 267 352 291C352 322 326 340 286 340C254 340 226 329 203 306" stroke="#F4F7FB" stroke-width="18" stroke-linecap="round" stroke-linejoin="round"/>
+
+  <circle cx="206" cy="228" r="8" fill="#F4F7FB"/>
+  <circle cx="308" cy="247" r="8" fill="#91D1FF"/>
+  <circle cx="286" cy="340" r="8" fill="#6B7CFF"/>
+
+  <text x="256" y="462" text-anchor="middle" fill="#F4F7FB" font-family="'Inter Tight', 'Helvetica Neue', Arial, sans-serif" font-size="39" font-weight="700" letter-spacing="5">
+    <tspan>MODEL</tspan><tspan fill="#8FD3FF">SCOPE</tspan>
+  </text>
+</svg>

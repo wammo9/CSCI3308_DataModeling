@@ -1,0 +1,69 @@
+<svg width="512" height="512" viewBox="0 0 512 512" fill="none" xmlns="http://www.w3.org/2000/svg">
+  <!-- Direction 4: Orbital — Tilted elliptical orbits (like electron shells) with data nodes -->
+  <defs>
+    <linearGradient id="d4-core" x1="230" y1="210" x2="290" y2="300" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#C88B3C"/>
+      <stop offset="1" stop-color="#A06E2C"/>
+    </linearGradient>
+    <linearGradient id="d4-orbit1" x1="80" y1="180" x2="432" y2="340" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#2A5C54"/>
+      <stop offset="0.5" stop-color="#3A7A6E"/>
+      <stop offset="1" stop-color="#2A5C54"/>
+    </linearGradient>
+    <linearGradient id="d4-orbit2" x1="120" y1="100" x2="400" y2="400" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#1B3A36"/>
+      <stop offset="0.5" stop-color="#2A5C54"/>
+      <stop offset="1" stop-color="#1B3A36"/>
+    </linearGradient>
+    <linearGradient id="d4-orbit3" x1="160" y1="60" x2="360" y2="440" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#C88B3C" stop-opacity="0.6"/>
+      <stop offset="0.5" stop-color="#D4993F" stop-opacity="0.4"/>
+      <stop offset="1" stop-color="#C88B3C" stop-opacity="0.6"/>
+    </linearGradient>
+    <filter id="d4-glow">
+      <feGaussianBlur stdDeviation="4" result="blur"/>
+      <feComposite in="SourceGraphic" in2="blur" operator="over"/>
+    </filter>
+  </defs>
+
+  <!-- Orbit 1: wide horizontal tilt -->
+  <ellipse cx="256" cy="256" rx="190" ry="70" transform="rotate(-15 256 256)" stroke="url(#d4-orbit1)" stroke-width="2.5" fill="none" opacity="0.7"/>
+
+  <!-- Orbit 2: medium tilt -->
+  <ellipse cx="256" cy="256" rx="165" ry="95" transform="rotate(25 256 256)" stroke="url(#d4-orbit2)" stroke-width="2.5" fill="none" opacity="0.6"/>
+
+  <!-- Orbit 3: steep tilt -->
+  <ellipse cx="256" cy="256" rx="140" ry="130" transform="rotate(70 256 256)" stroke="url(#d4-orbit3)" stroke-width="2" fill="none" opacity="0.5"/>
+
+  <!-- Core sphere -->
+  <circle cx="256" cy="256" r="32" fill="url(#d4-core)" filter="url(#d4-glow)"/>
+  <circle cx="248" cy="246" r="12" fill="white" opacity="0.15"/>
+
+  <!-- Data nodes on orbit 1 -->
+  <circle cx="108" cy="216" r="10" fill="#2A8C7A" opacity="0.9" filter="url(#d4-glow)"/>
+  <circle cx="108" cy="216" r="4.5" fill="#E8F4F0"/>
+  <circle cx="396" cy="276" r="9" fill="#3BA08C" opacity="0.85"/>
+  <circle cx="396" cy="276" r="4" fill="#E8F4F0"/>
+  <circle cx="320" cy="198" r="7" fill="#2A8C7A" opacity="0.75"/>
+
+  <!-- Data nodes on orbit 2 -->
+  <circle cx="142" cy="332" r="9.5" fill="#1B3A36" opacity="0.85" filter="url(#d4-glow)"/>
+  <circle cx="142" cy="332" r="4" fill="#C5DDD6"/>
+  <circle cx="370" cy="180" r="8.5" fill="#2A5C54" opacity="0.8"/>
+  <circle cx="370" cy="180" r="3.5" fill="#C5DDD6"/>
+  <circle cx="188" cy="158" r="6.5" fill="#1B3A36" opacity="0.7"/>
+
+  <!-- Data nodes on orbit 3 -->
+  <circle cx="220" cy="128" r="8" fill="#C88B3C" opacity="0.8"/>
+  <circle cx="220" cy="128" r="3.5" fill="#F0E6D4"/>
+  <circle cx="292" cy="384" r="8.5" fill="#D4993F" opacity="0.75"/>
+  <circle cx="292" cy="384" r="3.5" fill="#F0E6D4"/>
+
+  <!-- Inner "S" letter hint formed by orbits crossing -->
+  <!-- (the overlapping orbits naturally suggest an S-curve through the center) -->
+
+  <!-- Wordmark -->
+  <text x="256" y="472" text-anchor="middle" fill="#1B3A36" font-family="'SF Pro Display', 'Helvetica Neue', Arial, sans-serif" font-size="38" font-weight="700" letter-spacing="6">
+    <tspan>MODEL</tspan><tspan fill="#C88B3C">SCOPE</tspan>
+  </text>
+</svg>

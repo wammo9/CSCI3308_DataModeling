@@ -1,0 +1,41 @@
+<svg width="512" height="512" viewBox="0 0 512 512" fill="none" xmlns="http://www.w3.org/2000/svg">
+  <defs>
+    <linearGradient id="d5-bg" x1="42" y1="44" x2="468" y2="472" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#181C26"/>
+      <stop offset="1" stop-color="#232A39"/>
+    </linearGradient>
+    <linearGradient id="d5-frame" x1="144" y1="158" x2="372" y2="356" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#6B7CFF"/>
+      <stop offset="1" stop-color="#49C6B4"/>
+    </linearGradient>
+    <radialGradient id="d5-glow" cx="0" cy="0" r="1" gradientUnits="userSpaceOnUse" gradientTransform="translate(298 206) rotate(135) scale(132 104)">
+      <stop stop-color="#6B7CFF" stop-opacity="0.28"/>
+      <stop offset="1" stop-color="#6B7CFF" stop-opacity="0"/>
+    </radialGradient>
+  </defs>
+
+  <rect x="28" y="28" width="456" height="456" rx="108" fill="url(#d5-bg)"/>
+  <ellipse cx="298" cy="206" rx="132" ry="104" fill="url(#d5-glow)"/>
+
+  <path d="M138 296L298 166L374 218L214 348L138 296Z" stroke="url(#d5-frame)" stroke-width="14" stroke-linejoin="round"/>
+  <path d="M214 348V222L374 218" stroke="#F8F8FA" stroke-opacity="0.28" stroke-width="6" stroke-linecap="round" stroke-linejoin="round"/>
+  <path d="M138 296L214 348V222L138 296Z" fill="#6B7CFF" fill-opacity="0.12"/>
+
+  <circle cx="152" cy="250" r="9" fill="#A7AAB5"/>
+  <circle cx="178" cy="232" r="8" fill="#A7AAB5" fill-opacity="0.9"/>
+  <circle cx="204" cy="254" r="7" fill="#A7AAB5" fill-opacity="0.82"/>
+  <circle cx="168" cy="278" r="6" fill="#A7AAB5" fill-opacity="0.72"/>
+  <circle cx="197" cy="286" r="5" fill="#A7AAB5" fill-opacity="0.65"/>
+
+  <circle cx="272" cy="220" r="10" fill="#49C6B4"/>
+  <circle cx="298" cy="206" r="9" fill="#6B7CFF"/>
+  <circle cx="323" cy="224" r="8" fill="#F8F8FA"/>
+  <circle cx="286" cy="242" r="7" fill="#49C6B4" fill-opacity="0.9"/>
+  <circle cx="318" cy="253" r="6" fill="#6B7CFF" fill-opacity="0.86"/>
+
+  <path d="M140 352C175 374 214 385 255 385C305 385 348 370 382 342" stroke="#F8F8FA" stroke-opacity="0.18" stroke-width="4" stroke-linecap="round"/>
+
+  <text x="256" y="456" text-anchor="middle" fill="#F8F8FA" font-family="'Space Grotesk', 'Helvetica Neue', Arial, sans-serif" font-size="39" font-weight="700" letter-spacing="5">
+    <tspan>MODEL</tspan><tspan fill="#49C6B4">SCOPE</tspan>
+  </text>
+</svg>

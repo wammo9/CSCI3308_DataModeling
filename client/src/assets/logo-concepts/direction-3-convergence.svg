@@ -1,0 +1,81 @@
+<svg width="512" height="512" viewBox="0 0 512 512" fill="none" xmlns="http://www.w3.org/2000/svg">
+  <!-- Direction 3: Convergence — Scattered points funneling into focused insight -->
+  <defs>
+    <linearGradient id="d3-funnel" x1="256" y1="60" x2="256" y2="380" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#2A5C54" stop-opacity="0.06"/>
+      <stop offset="0.5" stop-color="#2A5C54" stop-opacity="0.12"/>
+      <stop offset="1" stop-color="#C88B3C" stop-opacity="0.18"/>
+    </linearGradient>
+    <radialGradient id="d3-focus" cx="256" cy="360" r="40" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#C88B3C" stop-opacity="0.35"/>
+      <stop offset="1" stop-color="#C88B3C" stop-opacity="0"/>
+    </radialGradient>
+    <filter id="d3-soft">
+      <feGaussianBlur stdDeviation="2"/>
+    </filter>
+  </defs>
+
+  <!-- Funnel shape (convergence zone) -->
+  <path d="M100 80 L256 360 L412 80" fill="url(#d3-funnel)" stroke="none"/>
+  <path d="M100 80 L256 360 L412 80" stroke="#2A5C54" stroke-width="1.5" stroke-opacity="0.1" fill="none"/>
+
+  <!-- Focus glow at convergence point -->
+  <circle cx="256" cy="360" r="40" fill="url(#d3-focus)"/>
+
+  <!-- Scattered raw data points (top — chaotic, multi-colored) -->
+  <!-- Row 1: very scattered -->
+  <circle cx="128" cy="108" r="7" fill="#7CB7A4" opacity="0.5"/>
+  <circle cx="182" cy="92" r="5" fill="#5E9D90" opacity="0.45"/>
+  <circle cx="224" cy="114" r="6" fill="#7CB7A4" opacity="0.55"/>
+  <circle cx="268" cy="96" r="5.5" fill="#5E9D90" opacity="0.5"/>
+  <circle cx="316" cy="104" r="7" fill="#7CB7A4" opacity="0.48"/>
+  <circle cx="362" cy="88" r="5" fill="#5E9D90" opacity="0.42"/>
+  <circle cx="390" cy="112" r="6" fill="#7CB7A4" opacity="0.5"/>
+
+  <!-- Row 2: slightly less scattered -->
+  <circle cx="148" cy="148" r="7.5" fill="#6BAAA0" opacity="0.58"/>
+  <circle cx="196" cy="138" r="6" fill="#5E9D90" opacity="0.6"/>
+  <circle cx="240" cy="156" r="5" fill="#6BAAA0" opacity="0.55"/>
+  <circle cx="276" cy="142" r="6.5" fill="#5E9D90" opacity="0.58"/>
+  <circle cx="320" cy="152" r="5.5" fill="#6BAAA0" opacity="0.6"/>
+  <circle cx="358" cy="140" r="7" fill="#5E9D90" opacity="0.55"/>
+
+  <!-- Row 3: converging -->
+  <circle cx="172" cy="194" r="8" fill="#4D8E80" opacity="0.65"/>
+  <circle cx="216" cy="188" r="6.5" fill="#3A7A6E" opacity="0.68"/>
+  <circle cx="256" cy="200" r="5.5" fill="#4D8E80" opacity="0.7"/>
+  <circle cx="296" cy="190" r="7" fill="#3A7A6E" opacity="0.65"/>
+  <circle cx="338" cy="198" r="6" fill="#4D8E80" opacity="0.62"/>
+
+  <!-- Row 4: tighter -->
+  <circle cx="198" cy="240" r="8.5" fill="#2A5C54" opacity="0.72"/>
+  <circle cx="236" cy="234" r="7" fill="#1B3A36" opacity="0.75"/>
+  <circle cx="272" cy="244" r="6" fill="#2A5C54" opacity="0.78"/>
+  <circle cx="310" cy="236" r="7.5" fill="#1B3A36" opacity="0.72"/>
+
+  <!-- Row 5: almost converged, warming to amber -->
+  <circle cx="222" cy="284" r="9" fill="#8A6E3A" opacity="0.8"/>
+  <circle cx="256" cy="280" r="7.5" fill="#A07C3E" opacity="0.82"/>
+  <circle cx="290" cy="288" r="8" fill="#8A6E3A" opacity="0.78"/>
+
+  <!-- Row 6: nearly focal -->
+  <circle cx="240" cy="322" r="9.5" fill="#C88B3C" opacity="0.88"/>
+  <circle cx="272" cy="326" r="8" fill="#D4993F" opacity="0.85"/>
+
+  <!-- Focal point — the insight -->
+  <circle cx="256" cy="360" r="14" fill="#C88B3C" opacity="0.95"/>
+  <circle cx="256" cy="360" r="8" fill="#F0E6D4"/>
+  <circle cx="256" cy="360" r="4" fill="#C88B3C"/>
+
+  <!-- Subtle crosshair at focal point -->
+  <line x1="236" y1="360" x2="276" y2="360" stroke="#1B3A36" stroke-width="1.2" stroke-opacity="0.2"/>
+  <line x1="256" y1="340" x2="256" y2="380" stroke="#1B3A36" stroke-width="1.2" stroke-opacity="0.2"/>
+
+  <!-- Wordmark -->
+  <text x="256" y="440" text-anchor="middle" fill="#1B3A36" font-family="'SF Pro Display', 'Helvetica Neue', Arial, sans-serif" font-size="40" font-weight="700" letter-spacing="5">
+    <tspan>MODEL</tspan><tspan fill="#C88B3C">SCOPE</tspan>
+  </text>
+  <text x="256" y="466" text-anchor="middle" fill="#6C7B75" font-family="'SF Pro Display', 'Helvetica Neue', Arial, sans-serif" font-size="13" font-weight="500" letter-spacing="6">
+    DIMENSIONALITY REDUCED
+  </text>
+</svg>
