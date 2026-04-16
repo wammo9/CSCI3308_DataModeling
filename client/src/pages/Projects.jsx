@@ -1,6 +1,8 @@
 import { Fragment, useState, useEffect, useRef } from "react";
 import { Link, useNavigate } from "react-router-dom";
 import { getToken } from "../App";
+import { useConfirm, useToast } from "../components/AppFeedback";
+import RunNoteMenu from "../components/RunNoteMenu";
 
 const apiBase = import.meta.env.VITE_API_URL || "";
 
@@ -25,22 +27,72 @@ function versionLabel(dataset) {
   return `v${dataset.version_number || 1}`;
 }
 
+function datasetTitle(dataset) {
+  return dataset.name || dataset.original_filename?.replace(/\.csv$/i, "") || "Dataset";
+}
+
+function normalizeTagInput(value = "") {
+  return [...new Set(
+    value
+      .split(",")
+      .map((tag) => tag.trim())
+      .filter(Boolean)
+  )].slice(0, 12);
+}
+
+function recommendedStepForDataset(dataset, runs = [], report = null) {
+  if (!report) {
+    return {
+      label: "Review quality",
+      description: "Start by checking row loss, ignored columns, and PCA readiness before you configure a run.",
+      action: "quality",
+    };
+  }
+  if (report.validForPca === false) {
+    return {
+      label: "Open assistant",
+      description: "This dataset needs cleanup guidance before PCA will be reliable.",
+      action: "assistant",
+    };
+  }
+  if (runs.length === 0) {
+    return {
+      label: "Preview PCA setup",
+      description: "Use the guided PCA preview to see retention and variance before committing a run.",
+      action: "options",
+    };
+  }
+  return {
+    label: "Review run history",
+    description: "You already have PCA output here. Check pinned runs, notes, and comparisons next.",
+    action: "runs",
+  };
+}
+
 export default function Projects() {
   const navigate = useNavigate();
   const fileRef = useRef(null);
   const correlationRef = useRef(null);
   const distributionRef = useRef(null);
   const scatterRef = useRef(null);
+  const toast = useToast();
+  const confirm = useConfirm();
 
   const [datasets, setDatasets] = useState([]);
   const [loadingDatasets, setLoadingDatasets] = useState(true);
   const [uploading, setUploading] = useState(false);
   const [uploadError, setUploadError] = useState("");
   const [uploadSuccess, setUploadSuccess] = useState("");
+  const [inspectLoading, setInspectLoading] = useState(false);
+  const [uploadInspection, setUploadInspection] = useState(null);
   const [runningPCA, setRunningPCA] = useState(null);
   const [samples, setSamples] = useState([]);
   const [sampleLoadingId, setSampleLoadingId] = useState(null);
   const [versionSourceId, setVersionSourceId] = useState("");
+  const [librarySearch, setLibrarySearch] = useState("");
+  const [librarySort, setLibrarySort] = useState("recent");
+  const [favoritesOnly, setFavoritesOnly] = useState(false);
+  const [activeTagFilter, setActiveTagFilter] = useState("");
 
   // Preview state
   const [preview, setPreview] = useState(null);
@@ -50,6 +102,7 @@ export default function Projects() {
   const [editingId, setEditingId] = useState(null);
   const [editName, setEditName] = useState("");
   const [editNotes, setEditNotes] = useState("");
+  const [editTags, setEditTags] = useState("");
 
   // Quality report state
   const [qualityReports, setQualityReports] = useState({});
@@ -250,6 +303,43 @@ export default function Projects() {
     }
   }
 
+  async function inspectSelectedFile(file) {
+    if (!file) {
+      setUploadInspection(null);
+      return;
+    }
+
+    const formData = new FormData();
+    formData.append("file", file);
+
+    setInspectLoading(true);
+    setUploadError("");
+    try {
+      const res = await fetch(`${apiBase}/api/datasets/inspect-upload`, {
+        method: "POST",
+        headers: authHeaders(),
+        body: formData,
+      });
+      const data = await res.json();
+      if (!res.ok) {
+        setUploadInspection(null);
+        setUploadError(data.message || "Could not inspect this file.");
+      } else {
+        setUploadInspection(data.inspection);
+      }
+    } catch {
+      setUploadInspection(null);
+      setUploadError("Could not inspect the selected file.");
+    } finally {
+      setInspectLoading(false);
+    }
+  }
+
+  function handleFileChange(event) {
+    const file = event.target.files?.[0];
+    inspectSelectedFile(file);
+  }
+
   async function handleUpload(e) {
     e.preventDefault();
     setUploadError("");
@@ -273,14 +363,18 @@ export default function Projects() {
       if (!res.ok) {
         setUploadError(data.message || "Upload failed");
       } else {
+        toast.success(`"${data.filename}" is ready in your workspace.`, "Dataset uploaded");
         setUploadSuccess(
           `"${data.filename}" uploaded — ${data.rowCount} rows, ${data.quantitativeColumns.length} numeric columns${data.versionNumber ? ` · ${versionSourceId ? `saved as version ${data.versionNumber}` : ""}` : ""}.`
         );
         fileRef.current.value = "";
         setVersionSourceId("");
+        setUploadInspection(null);
         fetchDatasets();
       }
-    } catch { setUploadError("Could not reach the server."); }
+    } catch {
+      setUploadError("Could not reach the server.");
+    }
     finally { setUploading(false); }
   }
 
@@ -293,11 +387,13 @@ export default function Projects() {
       });
       const data = await res.json();
       if (!res.ok) {
-        alert("PCA failed: " + (data.message || "Unknown error"));
+        toast.error(data.message || "PCA failed.");
       } else {
         navigate(`/visualize/${data.runId}`);
       }
-    } catch { alert("Could not reach the server."); }
+    } catch {
+      toast.error("Could not reach the server.");
+    }
     finally { setRunningPCA(null); }
   }
 
@@ -440,7 +536,7 @@ export default function Projects() {
         }));
       }
     } catch {
-      alert("Could not reach the server.");
+      toast.error("Could not reach the server.");
     } finally {
       setAssistantLoadingId(null);
     }
@@ -530,6 +626,7 @@ export default function Projects() {
       } else {
         setPresetsByDataset((current) => ({ ...current, [datasetId]: data.presets ?? [] }));
         setPresetName("");
+        toast.success("Preset saved for reuse.", "Preset ready");
       }
     } catch {
       setPresetError("Could not reach the server.");
@@ -547,9 +644,10 @@ export default function Projects() {
       const data = await res.json();
       if (res.ok) {
         setPresetsByDataset((current) => ({ ...current, [datasetId]: data.presets ?? [] }));
+        toast.success("Preset removed.", "Preset updated");
       }
     } catch {
-      alert("Could not reach the server.");
+      toast.error("Could not reach the server.");
     }
   }
 
@@ -621,7 +719,13 @@ export default function Projects() {
   }
 
   async function handleDeleteRun(runId, datasetId) {
-    if (!confirm("Delete this PCA run?")) return;
+    const confirmed = await confirm({
+      title: "Delete this PCA run?",
+      description: "The run, its notes, and any saved comparison context tied to it will be removed.",
+      confirmLabel: "Delete run",
+      confirmTone: "danger",
+    });
+    if (!confirmed) return;
     try {
       const res = await fetch(`${apiBase}/api/pca/${runId}`, {
         method: "DELETE",
@@ -629,8 +733,11 @@ export default function Projects() {
       });
       if (res.ok) {
         fetchRuns(datasetId);
+        toast.success("The PCA run was removed.", "Run deleted");
       }
-    } catch { alert("Could not reach the server."); }
+    } catch {
+      toast.error("Could not reach the server.");
+    }
   }
 
   async function handleSaveRunMeta(runId, datasetId, updates) {
@@ -663,7 +770,7 @@ export default function Projects() {
         }
       }
     } catch {
-      alert("Could not reach the server.");
+      toast.error("Could not reach the server.");
     } finally {
       setSavingRunMetaId(null);
     }
@@ -727,7 +834,9 @@ export default function Projects() {
         setAnalysisColorBy("row");
         setSelectedAnalysisPoint(null);
       }
-    } catch { alert("Could not reach the server."); }
+    } catch {
+      toast.error("Could not reach the server.");
+    }
     finally { setAnalysisLoadingId(null); }
   }
 
@@ -737,7 +846,7 @@ export default function Projects() {
         headers: authHeaders(),
       });
       if (!res.ok) {
-        alert("Could not create report.");
+        toast.error("Could not create report.");
         return;
       }
       const blob = await res.blob();
@@ -748,7 +857,7 @@ export default function Projects() {
       a.click();
       URL.revokeObjectURL(url);
     } catch {
-      alert("Could not reach the server.");
+      toast.error("Could not reach the server.");
     }
   }
 
@@ -758,7 +867,7 @@ export default function Projects() {
         headers: authHeaders(),
       });
       if (!res.ok) {
-        alert("Could not create project report.");
+        toast.error("Could not create project report.");
         return;
       }
       const blob = await res.blob();
@@ -769,14 +878,20 @@ export default function Projects() {
       a.click();
       URL.revokeObjectURL(url);
     } catch {
-      alert("Could not reach the server.");
+      toast.error("Could not reach the server.");
     }
   }
 
   // ── Feature 2: Delete ──
 
   async function handleDelete(datasetId, filename) {
-    if (!confirm(`Delete "${filename}" and all its PCA runs?`)) return;
+    const confirmed = await confirm({
+      title: `Delete "${filename}"?`,
+      description: "This removes the dataset, every PCA run tied to it, and any saved notes attached to those runs.",
+      confirmLabel: "Delete dataset",
+      confirmTone: "danger",
+    });
+    if (!confirmed) return;
     try {
       const res = await fetch(`${apiBase}/api/datasets/${datasetId}`, {
         method: "DELETE",
@@ -785,16 +900,20 @@ export default function Projects() {
       if (res.ok) {
         if (preview?.datasetId === datasetId) setPreview(null);
         fetchDatasets();
+        toast.success("The dataset and its PCA runs were removed.", "Dataset deleted");
       }
-    } catch { alert("Could not reach the server."); }
+    } catch {
+      toast.error("Could not reach the server.");
+    }
   }
 
   // ── Feature 5: Rename / Notes ──
 
   function startEditing(ds) {
     setEditingId(ds.id);
-    setEditName(ds.name || ds.original_filename.replace(/\.csv$/i, ""));
+    setEditName(datasetTitle(ds));
     setEditNotes(ds.notes || "");
+    setEditTags((ds.tags ?? []).join(", "));
   }
 
   async function saveEditing() {
@@ -802,19 +921,79 @@ export default function Projects() {
       const res = await fetch(`${apiBase}/api/datasets/${editingId}`, {
         method: "PATCH",
         headers: { ...authHeaders(), "Content-Type": "application/json" },
-        body: JSON.stringify({ name: editName, notes: editNotes }),
+        body: JSON.stringify({ name: editName, notes: editNotes, tags: normalizeTagInput(editTags) }),
       });
       if (res.ok) {
         setEditingId(null);
         fetchDatasets();
+        toast.success("Dataset details updated.", "Workspace organized");
       }
-    } catch { alert("Could not reach the server."); }
+    } catch {
+      toast.error("Could not reach the server.");
+    }
+  }
+
+  async function updateDatasetLibraryMeta(datasetId, updates, successMessage) {
+    try {
+      const res = await fetch(`${apiBase}/api/datasets/${datasetId}`, {
+        method: "PATCH",
+        headers: { ...authHeaders(), "Content-Type": "application/json" },
+        body: JSON.stringify(updates),
+      });
+      const data = await res.json();
+      if (!res.ok) {
+        toast.error(data.message || "Could not update the dataset.");
+        return;
+      }
+      setDatasets((current) => current.map((dataset) => (
+        dataset.id === datasetId
+          ? {
+              ...dataset,
+              name: data.dataset?.name ?? dataset.name,
+              notes: data.dataset?.notes ?? dataset.notes,
+              tags: data.dataset?.tags ?? dataset.tags,
+              is_favorite: data.dataset?.is_favorite ?? dataset.is_favorite,
+            }
+          : dataset
+      )));
+      if (successMessage) toast.success(successMessage, "Workspace updated");
+    } catch {
+      toast.error("Could not reach the server.");
+    }
+  }
+
+  function toggleFavorite(dataset) {
+    updateDatasetLibraryMeta(
+      dataset.id,
+      { isFavorite: !dataset.is_favorite },
+      !dataset.is_favorite ? "Added to favorites." : "Removed from favorites."
+    );
   }
 
   const totalRows = datasets.reduce((sum, dataset) => sum + Number(dataset.row_count || 0), 0);
   const averageNumericColumns = datasets.length
     ? datasets.reduce((sum, dataset) => sum + Number(dataset.quantitative_columns?.length || 0), 0) / datasets.length
     : 0;
+  const allTags = [...new Set(datasets.flatMap((dataset) => dataset.tags ?? []))].sort((a, b) => a.localeCompare(b));
+  const visibleDatasets = [...datasets]
+    .filter((dataset) => {
+      const matchesSearch = !librarySearch.trim() || [
+        datasetTitle(dataset),
+        dataset.original_filename,
+        ...(dataset.tags ?? []),
+        ...(dataset.quantitative_columns ?? []),
+      ].join(" ").toLowerCase().includes(librarySearch.trim().toLowerCase());
+      const matchesFavorite = !favoritesOnly || dataset.is_favorite;
+      const matchesTag = !activeTagFilter || (dataset.tags ?? []).includes(activeTagFilter);
+      return matchesSearch && matchesFavorite && matchesTag;
+    })
+    .sort((left, right) => {
+      if (librarySort === "name") return datasetTitle(left).localeCompare(datasetTitle(right));
+      if (librarySort === "rows") return Number(right.row_count || 0) - Number(left.row_count || 0);
+      if (librarySort === "numeric") return Number(right.quantitative_columns?.length || 0) - Number(left.quantitative_columns?.length || 0);
+      if (librarySort === "favorites") return Number(right.is_favorite === true) - Number(left.is_favorite === true) || new Date(right.upload_timestamp) - new Date(left.upload_timestamp);
+      return new Date(right.upload_timestamp) - new Date(left.upload_timestamp);
+    });
 
   return (
     <main className="app-shell workspace-shell">
@@ -870,7 +1049,7 @@ export default function Projects() {
         <form onSubmit={handleUpload} className="upload-form">
           <label className="file-input">
             <span className="meta-label">Choose file</span>
-            <input ref={fileRef} type="file" accept=".csv,text/csv" />
+            <input ref={fileRef} type="file" accept=".csv,text/csv" onChange={handleFileChange} />
             <small>Best results come from datasets with at least two stable numeric features.</small>
           </label>
           <label className="field compact-field">
@@ -888,6 +1067,62 @@ export default function Projects() {
             {uploading ? "Uploading…" : versionSourceId ? "Upload new version" : "Upload dataset"}
           </button>
         </form>
+
+        {inspectLoading && (
+          <div className="loading-card">
+            <p className="eyebrow">Inspecting</p>
+            <p>Checking column types, PCA readiness, and likely cleanup needs before upload.</p>
+          </div>
+        )}
+
+        {uploadInspection && !inspectLoading && (
+          <div className="detail-panel upload-inspection-card">
+            <div className="section-heading">
+              <div>
+                <p className="eyebrow">Pre-upload check</p>
+                <h3>{uploadInspection.filename}</h3>
+                <p className="muted">A quick validation pass so you know what will happen before the file lands in the workspace.</p>
+              </div>
+              <div className={`validation-card ${uploadInspection.qualityReport?.validForPca !== false ? "valid" : "invalid"}`}>
+                <strong>{uploadInspection.qualityReport?.validForPca !== false ? "Ready for PCA" : "Needs cleanup"}</strong>
+                <p>{uploadInspection.qualityReport?.validationMessage}</p>
+              </div>
+            </div>
+            <div className="quality-metrics">
+              <div>
+                <span className="meta-label">Rows found</span>
+                <strong>{formatNumber(uploadInspection.totalRows)}</strong>
+              </div>
+              <div>
+                <span className="meta-label">Rows usable</span>
+                <strong>{formatNumber(uploadInspection.usableRows)}</strong>
+              </div>
+              <div>
+                <span className="meta-label">Numeric columns</span>
+                <strong>{formatNumber(uploadInspection.numericColumns?.length)}</strong>
+              </div>
+              <div>
+                <span className="meta-label">Categorical columns</span>
+                <strong>{formatNumber(uploadInspection.categoricalColumns?.length)}</strong>
+              </div>
+            </div>
+            <div className="tag-list">
+              {(uploadInspection.numericColumns ?? []).map((column) => (
+                <span key={`inspect-n-${column}`} className="tag">{column}</span>
+              ))}
+              {(uploadInspection.categoricalColumns ?? []).map((column) => (
+                <span key={`inspect-c-${column}`} className="tag">{column}</span>
+              ))}
+            </div>
+            {(uploadInspection.recommendations ?? []).length > 0 && (
+              <div className="insight-grid">
+                {uploadInspection.recommendations.map((item) => (
+                  <div key={item} className="insight-card">{item}</div>
+                ))}
+              </div>
+            )}
+          </div>
+        )}
 
         {samples.length > 0 && (
           <div className="sample-list">
@@ -918,10 +1153,59 @@ export default function Projects() {
           </div>
         </div>
 
+        <div className="library-toolbar">
+          <label className="field">
+            <span>Search library</span>
+            <input
+              type="search"
+              value={librarySearch}
+              onChange={(event) => setLibrarySearch(event.target.value)}
+              placeholder="Name, tag, filename, or feature"
+            />
+          </label>
+          <label className="field compact-field">
+            <span>Sort by</span>
+            <select value={librarySort} onChange={(event) => setLibrarySort(event.target.value)}>
+              <option value="recent">Most recent</option>
+              <option value="name">Name</option>
+              <option value="rows">Rows</option>
+              <option value="numeric">Numeric features</option>
+              <option value="favorites">Favorites first</option>
+            </select>
+          </label>
+          <label className="check-row">
+            <input
+              type="checkbox"
+              checked={favoritesOnly}
+              onChange={(event) => setFavoritesOnly(event.target.checked)}
+            />
+            <span>Favorites only</span>
+          </label>
+        </div>
+
+        {allTags.length > 0 && (
+          <div className="tag-filter-row">
+            <button className={`tag-filter ${activeTagFilter === "" ? "active" : ""}`} onClick={() => setActiveTagFilter("")}>
+              All tags
+            </button>
+            {allTags.map((tag) => (
+              <button
+                key={tag}
+                className={`tag-filter ${activeTagFilter === tag ? "active" : ""}`}
+                onClick={() => setActiveTagFilter(tag)}
+              >
+                {tag}
+              </button>
+            ))}
+          </div>
+        )}
+
         {loadingDatasets ? (
           <p className="muted">Loading…</p>
         ) : datasets.length === 0 ? (
           <p className="empty-state">No datasets yet. Upload a CSV above to get started.</p>
+        ) : visibleDatasets.length === 0 ? (
+          <p className="empty-state">No datasets match the current search and filter controls.</p>
         ) : (
           <div className="dataset-table-wrap">
             <table className="dataset-table">
@@ -936,7 +1220,7 @@ export default function Projects() {
                 </tr>
               </thead>
               <tbody>
-                {datasets.map((ds) => {
+                {visibleDatasets.map((ds) => {
                   const reportState = qualityReports[ds.id];
                   const report = reportState?.report;
                   const runs = runsByDataset[ds.id] ?? [];
@@ -946,6 +1230,7 @@ export default function Projects() {
                   const hasAnalysis = openAnalysisId === ds.id;
                   const hasAssistant = openAssistantId === ds.id;
                   const assistant = assistantByDataset[ds.id];
+                  const nextStep = recommendedStepForDataset(ds, runs, report);
                   return (
                     <Fragment key={ds.id}>
                       <tr>
@@ -967,6 +1252,13 @@ export default function Projects() {
                                 placeholder="Notes (optional)"
                                 rows={2}
                               />
+                              <input
+                                type="text"
+                                value={editTags}
+                                onChange={(e) => setEditTags(e.target.value)}
+                                className="edit-input"
+                                placeholder="Tags separated by commas"
+                              />
                               <div className="edit-actions">
                                 <button className="btn btn-small btn-primary" onClick={saveEditing}>Save</button>
                                 <button className="btn btn-small btn-ghost" onClick={() => setEditingId(null)}>Cancel</button>
@@ -974,12 +1266,24 @@ export default function Projects() {
                             </div>
                           ) : (
                             <div>
-                              <span className="filename">
-                                {ds.name || ds.original_filename.replace(/\.csv$/i, "")}
-                              </span>
+                              <div className="dataset-name-row">
+                                <button
+                                  className={`favorite-btn ${ds.is_favorite ? "active" : ""}`}
+                                  onClick={() => toggleFavorite(ds)}
+                                  aria-label={ds.is_favorite ? "Remove from favorites" : "Add to favorites"}
+                                >
+                                  {ds.is_favorite ? "★" : "☆"}
+                                </button>
+                                <span className="filename">
+                                  {datasetTitle(ds)}
+                                </span>
+                              </div>
                               <div className="tag-list">
                                 <span className="tag">{versionLabel(ds)}</span>
                                 {ds.previous_version_id && <span className="tag">Versioned dataset</span>}
+                                {(ds.tags ?? []).map((tag) => (
+                                  <span key={`${ds.id}-${tag}`} className="tag">{tag}</span>
+                                ))}
                               </div>
                               {ds.notes && <p className="ds-notes">{ds.notes}</p>}
                             </div>
@@ -1074,6 +1378,23 @@ export default function Projects() {
                             >
                               Delete
                             </button>
+                          </div>
+                          <div className="next-step-card">
+                            <span className="meta-label">Recommended next step</span>
+                            <strong>{nextStep.label}</strong>
+                            <p>{nextStep.description}</p>
+                            {nextStep.action === "quality" && (
+                              <button className="btn btn-small btn-ghost" onClick={() => handleQuality(ds.id)}>Open quality</button>
+                            )}
+                            {nextStep.action === "assistant" && (
+                              <button className="btn btn-small btn-ghost" onClick={() => handleAssistant(ds.id)}>Open assistant</button>
+                            )}
+                            {nextStep.action === "options" && (
+                              <button className="btn btn-small btn-ghost" onClick={() => startConfiguring(ds)}>Open options</button>
+                            )}
+                            {nextStep.action === "runs" && (
+                              <button className="btn btn-small btn-ghost" onClick={() => handleRuns(ds.id)}>Open runs</button>
+                            )}
                           </div>
                         </td>
                       </tr>
@@ -1569,15 +1890,13 @@ export default function Projects() {
                                         >
                                           {run.is_pinned ? "Unpin" : "Pin"}
                                         </button>
-                                        <button
-                                          className="btn btn-small btn-ghost"
-                                          onClick={() => {
+                                        <RunNoteMenu
+                                          noteExists={Boolean(run.notes)}
+                                          onEditNote={() => {
                                             setEditingRunId(run.id);
                                             setRunNoteDraft(run.notes || "");
                                           }}
-                                        >
-                                          {run.notes ? "Edit note" : "Add note"}
-                                        </button>
+                                        />
                                         <button
                                           className="btn btn-small btn-danger"
                                           onClick={() => handleDeleteRun(run.id, ds.id)}

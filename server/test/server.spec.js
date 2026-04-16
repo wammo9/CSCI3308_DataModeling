@@ -11,10 +11,23 @@ import { strict as assert } from 'assert';
 import request from 'supertest';
 import app, {
   buildCleaningAssistant,
+  buildUploadInspection,
   buildPcaPreview,
   buildPreprocessingDiff,
   buildRunComparison,
+  normalizeTagList,
 } from '../src/index.js';
+
+let server;
+
+before((done) => {
+  server = app.listen(0, '127.0.0.1', done);
+});
+
+after((done) => {
+  if (!server) return done();
+  return server.close(done);
+});
 
 // Helper: generate a valid JWT for auth-protected route tests
 async function makeToken() {
@@ -30,7 +43,7 @@ async function makeToken() {
 
 describe('Server', () => {
   it('GET /welcome returns the default welcome message', async () => {
-    const res = await request(app).get('/welcome');
+    const res = await request(server).get('/welcome');
     assert.equal(res.status, 200);
     assert.equal(res.body.status, 'success');
     assert.equal(res.body.message, 'Welcome!');
@@ -42,7 +55,7 @@ describe('Server', () => {
 describe('Testing Register API', () => {
   // Positive case: valid username + password → 200 + "Success"
   it('positive : /register — valid input returns 200 and Success', async () => {
-    const res = await request(app)
+    const res = await request(server)
       .post('/register')
       .send({ username: 'testuser', password: 'password123' });
     assert.equal(res.status, 200);
@@ -51,7 +64,7 @@ describe('Testing Register API', () => {
 
   // Negative case: missing password / wrong type → 400 + "Invalid input"
   it('negative : /register — invalid input returns 400 and Invalid input', async () => {
-    const res = await request(app)
+    const res = await request(server)
       .post('/register')
       .send({ username: 12345 }); // not a string, missing password
     assert.equal(res.status, 400);
@@ -60,7 +73,7 @@ describe('Testing Register API', () => {
 
   // Negative case: password too short
   it('negative : /register — short password returns 400', async () => {
-    const res = await request(app)
+    const res = await request(server)
       .post('/register')
       .send({ username: 'testuser', password: '123' });
     assert.equal(res.status, 400);
@@ -72,7 +85,7 @@ describe('Testing Register API', () => {
 
 describe('Testing Redirect', () => {
   it('GET /test redirects to /login with 302', async () => {
-    const res = await request(app).get('/test').redirects(0);
+    const res = await request(server).get('/test').redirects(0);
     assert.equal(res.status, 302);
     assert.ok(res.headers.location.endsWith('/login'));
   });
@@ -80,7 +93,7 @@ describe('Testing Redirect', () => {
 
 describe('Testing Render', () => {
   it('GET /login responds with HTML and status 200', async () => {
-    const res = await request(app).get('/login');
+    const res = await request(server).get('/login');
     assert.equal(res.status, 200);
     assert.ok(res.headers['content-type'].includes('html'));
   });
@@ -90,67 +103,77 @@ describe('Testing Render', () => {
 
 describe('Auth-protected routes', () => {
   it('GET /api/datasets without a token returns 401', async () => {
-    const res = await request(app).get('/api/datasets');
+    const res = await request(server).get('/api/datasets');
     assert.equal(res.status, 401);
   });
 
   it('POST /api/datasets/upload without a token returns 401', async () => {
-    const res = await request(app).post('/api/datasets/upload');
+    const res = await request(server).post('/api/datasets/upload');
     assert.equal(res.status, 401);
   });
 
   it('GET /api/datasets/1/preview without a token returns 401', async () => {
-    const res = await request(app).get('/api/datasets/1/preview');
+    const res = await request(server).get('/api/datasets/1/preview');
     assert.equal(res.status, 401);
   });
 
   it('DELETE /api/datasets/1 without a token returns 401', async () => {
-    const res = await request(app).delete('/api/datasets/1');
+    const res = await request(server).delete('/api/datasets/1');
     assert.equal(res.status, 401);
   });
 
   it('DELETE /api/pca/1 without a token returns 401', async () => {
-    const res = await request(app).delete('/api/pca/1');
+    const res = await request(server).delete('/api/pca/1');
     assert.equal(res.status, 401);
   });
 
   it('PATCH /api/datasets/1 without a token returns 401', async () => {
-    const res = await request(app).patch('/api/datasets/1');
+    const res = await request(server).patch('/api/datasets/1');
     assert.equal(res.status, 401);
   });
 
   it('GET /api/pca/1/export without a token returns 401', async () => {
-    const res = await request(app).get('/api/pca/1/export');
+    const res = await request(server).get('/api/pca/1/export');
     assert.equal(res.status, 401);
   });
 
   it('GET /api/datasets/1/assistant without a token returns 401', async () => {
-    const res = await request(app).get('/api/datasets/1/assistant');
+    const res = await request(server).get('/api/datasets/1/assistant');
     assert.equal(res.status, 401);
   });
 
   it('GET /api/datasets/1/pca/compare without a token returns 401', async () => {
-    const res = await request(app).get('/api/datasets/1/pca/compare?runA=1&runB=2');
+    const res = await request(server).get('/api/datasets/1/pca/compare?runA=1&runB=2');
+    assert.equal(res.status, 401);
+  });
+
+  it('GET /api/profile without a token returns 401', async () => {
+    const res = await request(server).get('/api/profile');
+    assert.equal(res.status, 401);
+  });
+
+  it('POST /api/datasets/inspect-upload without a token returns 401', async () => {
+    const res = await request(server).post('/api/datasets/inspect-upload');
     assert.equal(res.status, 401);
   });
 
   it('GET /api/datasets/1/versions without a token returns 401', async () => {
-    const res = await request(app).get('/api/datasets/1/versions');
+    const res = await request(server).get('/api/datasets/1/versions');
     assert.equal(res.status, 401);
   });
 
   it('GET /api/datasets/1/presets without a token returns 401', async () => {
-    const res = await request(app).get('/api/datasets/1/presets');
+    const res = await request(server).get('/api/datasets/1/presets');
     assert.equal(res.status, 401);
   });
 
   it('POST /api/datasets/1/pca/preview without a token returns 401', async () => {
-    const res = await request(app).post('/api/datasets/1/pca/preview');
+    const res = await request(server).post('/api/datasets/1/pca/preview');
     assert.equal(res.status, 401);
   });
 
   it('PATCH /api/pca/1 without a token returns 401', async () => {
-    const res = await request(app).patch('/api/pca/1');
+    const res = await request(server).patch('/api/pca/1');
     assert.equal(res.status, 401);
   });
 });
@@ -160,7 +183,7 @@ describe('Auth-protected routes', () => {
 describe('Upload validation', () => {
   it('POST /api/datasets/upload with a valid token but no file returns 400', async () => {
     const token = await makeToken();
-    const res = await request(app)
+    const res = await request(server)
       .post('/api/datasets/upload')
       .set('Authorization', `Bearer ${token}`);
     assert.equal(res.status, 400);
@@ -173,7 +196,7 @@ describe('Upload validation', () => {
 describe('Dataset rename/notes validation', () => {
   it('PATCH /api/datasets/:id with empty body returns 400', async () => {
     const token = await makeToken();
-    const res = await request(app)
+    const res = await request(server)
       .patch('/api/datasets/1')
       .set('Authorization', `Bearer ${token}`)
       .send({});
@@ -187,7 +210,7 @@ describe('Dataset rename/notes validation', () => {
 describe('Export PCA results', () => {
   it('GET /api/pca/invalid/export with non-numeric id returns 400', async () => {
     const token = await makeToken();
-    const res = await request(app)
+    const res = await request(server)
       .get('/api/pca/abc/export')
       .set('Authorization', `Bearer ${token}`);
     assert.equal(res.status, 400);
@@ -199,13 +222,13 @@ describe('Export PCA results', () => {
 
 describe('API info routes', () => {
   it('GET /api/health returns ok status', async () => {
-    const res = await request(app).get('/api/health');
+    const res = await request(server).get('/api/health');
     assert.equal(res.status, 200);
     assert.equal(res.body.status, 'ok');
   });
 
   it('GET /api/features returns an array of features', async () => {
-    const res = await request(app).get('/api/features');
+    const res = await request(server).get('/api/features');
     assert.equal(res.status, 200);
     assert.ok(Array.isArray(res.body));
     assert.ok(res.body.length >= 3);
@@ -242,6 +265,44 @@ describe('Cleaning assistant summary', () => {
     assert.ok(assistant.actions.some((action) => action.type === 'missing-values'));
     assert.ok(assistant.actions.some((action) => action.type === 'constant-columns'));
     assert.ok(assistant.actions.some((action) => action.type === 'mixed-columns'));
+  });
+});
+
+describe('Upload inspection summary', () => {
+  it('summarizes readiness, row counts, and recommendations for a parsed dataset', () => {
+    const inspection = buildUploadInspection({
+      filename: 'example.csv',
+      records: [
+        { a: '1', b: '2' },
+        { a: '3', b: '' },
+        { a: '4', b: '5' },
+      ],
+      rowCount: 2,
+      columnCount: 2,
+      quantColumns: ['a', 'b'],
+      categoricalColumns: [],
+      preview: [{ a: '1', b: '2' }],
+      qualityReport: {
+        validForPca: true,
+        validationMessage: 'Dataset is valid for PCA.',
+        rows: { usableForPca: 2, droppedForPca: 1 },
+        ignoredColumns: [],
+        warnings: ['1 row excluded from PCA due to missing values.'],
+      },
+    });
+
+    assert.equal(inspection.totalRows, 3);
+    assert.equal(inspection.usableRows, 2);
+    assert.equal(inspection.droppedRows, 1);
+    assert.ok(Array.isArray(inspection.recommendations));
+    assert.ok(inspection.recommendations.some((item) => item.toLowerCase().includes('fill strategy')));
+  });
+});
+
+describe('Tag normalization', () => {
+  it('deduplicates, trims, and caps dataset tags', () => {
+    const tags = normalizeTagList(['  baseline ', 'reporting', 'baseline', '', 'qa']);
+    assert.deepEqual(tags, ['baseline', 'reporting', 'qa']);
   });
 });
 

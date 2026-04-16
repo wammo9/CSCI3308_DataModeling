@@ -4,7 +4,12 @@ import Register from "./pages/Register";
 import Projects from "./pages/Projects";
 import Visualize from "./pages/Visualize";
 import Compare from "./pages/Compare";
+import Settings from "./pages/Settings";
 import BrandLockup from "./components/BrandLockup";
+import { AppFeedbackProvider } from "./components/AppFeedback";
+import { PinkyProvider } from "./components/PinkyProvider";
+import { usePinky } from "./components/PinkyProvider";
+import FeatherIcon from "./components/FeatherIcon";
 
 // ── Auth helpers ──────────────────────────────────────────────────────────────
 
@@ -31,11 +36,22 @@ function Protected({ children }) {
 function Navbar() {
   const navigate = useNavigate();
   const loggedIn = !!getToken();
+  const { enabled, toggleEnabled, coarsePointer, reducedMotion } = usePinky();
 
   function handleLogout() {
     clearToken();
     navigate("/login");
   }
+
+  const pinkyTitle = coarsePointer
+    ? "Pinky is available on desktop pointer devices."
+    : reducedMotion
+      ? enabled
+        ? "Pinky is on in reduced-motion mode."
+        : "Turn Pinky on in reduced-motion mode."
+      : enabled
+        ? "Turn Pinky off"
+        : "Turn Pinky on";
 
   return (
     <nav className="navbar">
@@ -44,10 +60,24 @@ function Navbar() {
           <BrandLockup compact />
         </NavLink>
         <div className="navbar-links">
+          <button
+            type="button"
+            className={`btn-link pinky-nav-toggle ${enabled ? "is-enabled" : ""}`}
+            onClick={() => {
+              if (!coarsePointer) toggleEnabled();
+            }}
+            aria-pressed={enabled}
+            aria-label={pinkyTitle}
+            title={pinkyTitle}
+          >
+            <FeatherIcon active={enabled && !coarsePointer} className="navbar-feather" />
+            <span className="pinky-nav-text">{enabled ? "Pinky" : "Wake Pinky"}</span>
+          </button>
           {loggedIn ? (
             <>
               <NavLink to="/projects">Projects</NavLink>
               <NavLink to="/compare">Compare</NavLink>
+              <NavLink to="/settings">Settings</NavLink>
               <button className="btn-link" onClick={handleLogout}>
                 Log out
               </button>
@@ -160,38 +190,50 @@ function Home() {
 export default function App() {
   return (
     <BrowserRouter>
-      <Navbar />
-      <Routes>
-        <Route path="/" element={<Home />} />
-        <Route path="/login" element={<Login />} />
-        <Route path="/register" element={<Register />} />
-        <Route
-          path="/projects"
-          element={
-            <Protected>
-              <Projects />
-            </Protected>
-          }
-        />
-        <Route
-          path="/visualize/:runId"
-          element={
-            <Protected>
-              <Visualize />
-            </Protected>
-          }
-        />
-        <Route
-          path="/compare"
-          element={
-            <Protected>
-              <Compare />
-            </Protected>
-          }
-        />
-        {/* Catch-all */}
-        <Route path="*" element={<Navigate to="/" replace />} />
-      </Routes>
+      <AppFeedbackProvider>
+        <PinkyProvider>
+          <Navbar />
+          <Routes>
+            <Route path="/" element={<Home />} />
+            <Route path="/login" element={<Login />} />
+            <Route path="/register" element={<Register />} />
+            <Route
+              path="/projects"
+              element={
+                <Protected>
+                  <Projects />
+                </Protected>
+              }
+            />
+            <Route
+              path="/visualize/:runId"
+              element={
+                <Protected>
+                  <Visualize />
+                </Protected>
+              }
+            />
+            <Route
+              path="/compare"
+              element={
+                <Protected>
+                  <Compare />
+                </Protected>
+              }
+            />
+            <Route
+              path="/settings"
+              element={
+                <Protected>
+                  <Settings />
+                </Protected>
+              }
+            />
+            {/* Catch-all */}
+            <Route path="*" element={<Navigate to="/" replace />} />
+          </Routes>
+        </PinkyProvider>
+      </AppFeedbackProvider>
     </BrowserRouter>
   );
 }

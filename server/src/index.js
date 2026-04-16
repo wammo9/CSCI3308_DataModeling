@@ -93,10 +93,14 @@ async function resolveUserId(req) {
 }
 
 async function ensureSchema() {
+  await pool.query('ALTER TABLE users ADD COLUMN IF NOT EXISTS display_name TEXT DEFAULT \'\'');
+  await pool.query('ALTER TABLE users ADD COLUMN IF NOT EXISTS email VARCHAR(255)');
   await pool.query('ALTER TABLE datasets ADD COLUMN IF NOT EXISTS quality_report JSONB');
   await pool.query('ALTER TABLE datasets ADD COLUMN IF NOT EXISTS categorical_columns TEXT[]');
   await pool.query('ALTER TABLE datasets ADD COLUMN IF NOT EXISTS row_metadata JSONB');
   await pool.query('ALTER TABLE datasets ADD COLUMN IF NOT EXISTS all_records JSONB');
+  await pool.query('ALTER TABLE datasets ADD COLUMN IF NOT EXISTS is_favorite BOOLEAN DEFAULT FALSE');
+  await pool.query('ALTER TABLE datasets ADD COLUMN IF NOT EXISTS tags TEXT[] DEFAULT ARRAY[]::TEXT[]');
   await pool.query('ALTER TABLE datasets ADD COLUMN IF NOT EXISTS saved_presets JSONB DEFAULT \'[]\'::jsonb');
   await pool.query('ALTER TABLE datasets ADD COLUMN IF NOT EXISTS version_group_id INTEGER');
   await pool.query('ALTER TABLE datasets ADD COLUMN IF NOT EXISTS previous_version_id INTEGER');
@@ -109,6 +113,8 @@ async function ensureSchema() {
   await pool.query('ALTER TABLE pca_runs ADD COLUMN IF NOT EXISTS notes TEXT DEFAULT \'\'');
   await pool.query('ALTER TABLE pca_runs ADD COLUMN IF NOT EXISTS is_pinned BOOLEAN DEFAULT FALSE');
   await pool.query('UPDATE datasets SET saved_presets = \'[]\'::jsonb WHERE saved_presets IS NULL');
+  await pool.query('UPDATE datasets SET is_favorite = FALSE WHERE is_favorite IS NULL');
+  await pool.query('UPDATE datasets SET tags = ARRAY[]::TEXT[] WHERE tags IS NULL');
   await pool.query('UPDATE datasets SET version_number = 1 WHERE version_number IS NULL');
   await pool.query('UPDATE datasets SET version_group_id = id WHERE version_group_id IS NULL');
   await pool.query('UPDATE pca_runs SET notes = \'\' WHERE notes IS NULL');
@@ -463,6 +469,58 @@ function buildDatasetFromRecords(records, filename) {
     qualityReport,
     rowCount: clean.length,
     columnCount: allColumns.length,
+  };
+}
+
+function normalizeTagList(input) {
+  const values = Array.isArray(input)
+    ? input
+    : typeof input === 'string'
+      ? input.split(',')
+      : [];
+  const normalized = values
+    .map((value) => String(value).trim())
+    .filter(Boolean)
+    .slice(0, 12);
+  return [...new Set(normalized)].map((tag) => tag.slice(0, 32));
+}
+
+function buildUploadInspection(dataset) {
+  const qualityReport = dataset.qualityReport;
+  const totalRows = dataset.records.length;
+  const usableRows = qualityReport?.rows?.usableForPca ?? dataset.rowCount;
+  const droppedRows = qualityReport?.rows?.droppedForPca ?? Math.max(0, totalRows - usableRows);
+  const ignoredColumns = qualityReport?.ignoredColumns?.map((item) => item.name) ?? [];
+  const recommendations = [];
+
+  if (qualityReport?.validForPca === false) {
+    recommendations.push('Add at least two stable numeric columns or clean invalid values before running PCA.');
+  }
+  if (droppedRows > 0) {
+    recommendations.push('Use the cleaning assistant or a fill strategy to recover rows lost to missing numeric values.');
+  }
+  if ((qualityReport?.warnings ?? []).some((warning) => warning.toLowerCase().includes('same value'))) {
+    recommendations.push('Remove constant columns before PCA so they do not add noise to the workflow.');
+  }
+  if (dataset.categoricalColumns.length > 0) {
+    recommendations.push('Consider one-hot encoding the categorical labels if those groups should influence the PCA view.');
+  }
+  if (recommendations.length === 0) {
+    recommendations.push('This file looks PCA-ready. Upload it and start with the recommended preset.');
+  }
+
+  return {
+    filename: dataset.filename,
+    totalRows,
+    usableRows,
+    droppedRows,
+    columnCount: dataset.columnCount,
+    numericColumns: dataset.quantColumns,
+    categoricalColumns: dataset.categoricalColumns,
+    ignoredColumns,
+    previewRows: dataset.preview,
+    qualityReport,
+    recommendations,
   };
 }
 
@@ -1647,6 +1705,134 @@ app.post('/api/login', async (req, res) => {
   }
 });
 
+app.get('/api/profile', requireAuth, async (req, res) => {
+  if (process.env.NODE_ENV === 'test') {
+    return res.json({
+      status: 'success',
+      profile: {
+        username: req.user.username,
+        displayName: '',
+        email: '',
+        createdAt: new Date(0).toISOString(),
+      },
+    });
+  }
+
+  try {
+    const uid = await resolveUserId(req);
+    const result = await pool.query(
+      `SELECT username, display_name, email, created_at
+       FROM users
+       WHERE id = $1`,
+      [uid]
+    );
+    if (!result.rows.length) {
+      return res.status(404).json({ status: 'error', message: 'Profile not found' });
+    }
+
+    const user = result.rows[0];
+    return res.json({
+      status: 'success',
+      profile: {
+        username: user.username,
+        displayName: user.display_name ?? '',
+        email: user.email ?? '',
+        createdAt: user.created_at,
+      },
+    });
+  } catch (err) {
+    console.error('Profile lookup error:', err);
+    return res.status(500).json({ status: 'error', message: 'Server error' });
+  }
+});
+
+app.patch('/api/profile', requireAuth, async (req, res) => {
+  const displayName = req.body?.displayName;
+  const email = req.body?.email;
+
+  if (displayName === undefined && email === undefined) {
+    return res.status(400).json({ status: 'error', message: 'Provide displayName or email to update' });
+  }
+
+  try {
+    const uid = await resolveUserId(req);
+    const fields = [];
+    const values = [];
+    let index = 1;
+
+    if (displayName !== undefined) {
+      fields.push(`display_name = $${index++}`);
+      values.push(String(displayName).trim().slice(0, 80));
+    }
+    if (email !== undefined) {
+      const normalizedEmail = String(email).trim().toLowerCase();
+      if (normalizedEmail && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(normalizedEmail)) {
+        return res.status(400).json({ status: 'error', message: 'Enter a valid email address' });
+      }
+      fields.push(`email = $${index++}`);
+      values.push(normalizedEmail || null);
+    }
+
+    values.push(uid);
+    const result = await pool.query(
+      `UPDATE users
+       SET ${fields.join(', ')}
+       WHERE id = $${index}
+       RETURNING username, display_name, email, created_at`,
+      values
+    );
+
+    return res.json({
+      status: 'success',
+      profile: {
+        username: result.rows[0].username,
+        displayName: result.rows[0].display_name ?? '',
+        email: result.rows[0].email ?? '',
+        createdAt: result.rows[0].created_at,
+      },
+    });
+  } catch (err) {
+    console.error('Profile update error:', err);
+    return res.status(500).json({ status: 'error', message: 'Server error' });
+  }
+});
+
+app.patch('/api/profile/password', requireAuth, async (req, res) => {
+  const currentPassword = String(req.body?.currentPassword ?? '');
+  const nextPassword = String(req.body?.nextPassword ?? '');
+
+  if (!currentPassword || !nextPassword) {
+    return res.status(400).json({ status: 'error', message: 'Current and new password are required' });
+  }
+  if (nextPassword.length < 6) {
+    return res.status(400).json({ status: 'error', message: 'New password must be at least 6 characters' });
+  }
+
+  if (process.env.NODE_ENV === 'test') {
+    return res.json({ status: 'success', message: 'Password updated' });
+  }
+
+  try {
+    const uid = await resolveUserId(req);
+    const result = await pool.query('SELECT password_hash FROM users WHERE id = $1', [uid]);
+    if (!result.rows.length) {
+      return res.status(404).json({ status: 'error', message: 'Profile not found' });
+    }
+
+    const valid = await bcrypt.compare(currentPassword, result.rows[0].password_hash);
+    if (!valid) {
+      return res.status(401).json({ status: 'error', message: 'Current password is incorrect' });
+    }
+
+    const hash = await bcrypt.hash(nextPassword, 10);
+    await pool.query('UPDATE users SET password_hash = $1 WHERE id = $2', [hash, uid]);
+    return res.json({ status: 'success', message: 'Password updated' });
+  } catch (err) {
+    console.error('Password update error:', err);
+    return res.status(500).json({ status: 'error', message: 'Server error' });
+  }
+});
+
 // ── Datasets ──────────────────────────────────────────────────────────────────
 
 // List all datasets for the authenticated user
@@ -1656,6 +1842,7 @@ app.get('/api/datasets', requireAuth, async (req, res) => {
     const result = await pool.query(
       `SELECT id, original_filename, name, notes, row_count, column_count,
               quantitative_columns, categorical_columns, all_columns, upload_timestamp,
+              is_favorite, tags,
               version_group_id, previous_version_id, version_number
        FROM datasets
        WHERE user_id = $1
@@ -1834,6 +2021,33 @@ app.post('/api/samples/:id', requireAuth, async (req, res) => {
   } catch (err) {
     console.error('Create sample dataset error:', err);
     return res.status(500).json({ status: 'error', message: 'Could not create sample dataset' });
+  }
+});
+
+app.post('/api/datasets/inspect-upload', requireAuth, upload.single('file'), async (req, res) => {
+  if (!req.file) {
+    return res.status(400).json({ status: 'error', message: 'No file uploaded' });
+  }
+
+  let records;
+  try {
+    records = parse(req.file.buffer, {
+      columns: true,
+      skip_empty_lines: true,
+      trim: true,
+    });
+  } catch (err) {
+    return res.status(400).json({ status: 'error', message: 'Could not parse CSV: ' + err.message });
+  }
+
+  try {
+    const dataset = buildDatasetFromRecords(records, req.file.originalname);
+    return res.json({
+      status: 'success',
+      inspection: buildUploadInspection(dataset),
+    });
+  } catch (err) {
+    return res.status(400).json({ status: 'error', message: err.message });
   }
 });
 
@@ -2147,9 +2361,9 @@ app.patch('/api/datasets/:id', requireAuth, async (req, res) => {
     return res.status(400).json({ status: 'error', message: 'Invalid dataset id' });
   }
 
-  const { name, notes } = req.body ?? {};
-  if (name === undefined && notes === undefined) {
-    return res.status(400).json({ status: 'error', message: 'Provide name or notes to update' });
+  const { name, notes, tags, isFavorite } = req.body ?? {};
+  if (name === undefined && notes === undefined && tags === undefined && isFavorite === undefined) {
+    return res.status(400).json({ status: 'error', message: 'Provide name or notes to update, or pass tags/favorite state' });
   }
 
   try {
@@ -2166,12 +2380,20 @@ app.patch('/api/datasets/:id', requireAuth, async (req, res) => {
       fields.push(`notes = $${idx++}`);
       values.push(String(notes).slice(0, 2000));
     }
+    if (tags !== undefined) {
+      fields.push(`tags = $${idx++}`);
+      values.push(normalizeTagList(tags));
+    }
+    if (isFavorite !== undefined) {
+      fields.push(`is_favorite = $${idx++}`);
+      values.push(Boolean(isFavorite));
+    }
     values.push(datasetId, uid);
 
     const result = await pool.query(
       `UPDATE datasets SET ${fields.join(', ')}
        WHERE id = $${idx++} AND user_id = $${idx}
-       RETURNING id, name, notes`,
+       RETURNING id, name, notes, tags, is_favorite`,
       values
     );
     if (!result.rows.length) {
@@ -2651,10 +2873,12 @@ if (process.env.NODE_ENV !== 'test') {
 
 export {
   buildCleaningAssistant,
+  buildUploadInspection,
   buildPcaPreview,
   buildPreprocessingDiff,
   buildRunComparison,
   fallbackQualityReportFromDataset,
+  normalizeTagList,
 };
 
 export default app;

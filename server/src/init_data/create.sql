@@ -1,14 +1,13 @@
 -- ModelScope database schema
 -- Runs automatically when the Postgres container first starts.
+-- Keep initialization non-destructive so local data survives container restarts.
 
-DROP TABLE IF EXISTS pca_runs CASCADE;
-DROP TABLE IF EXISTS datasets CASCADE;
-DROP TABLE IF EXISTS users CASCADE;
-
-CREATE TABLE users (
+CREATE TABLE IF NOT EXISTS users (
     id            SERIAL PRIMARY KEY,
     username      VARCHAR(50)  UNIQUE NOT NULL,
     password_hash CHAR(60)     NOT NULL,
+    display_name  TEXT         DEFAULT '',
+    email         VARCHAR(255),
     created_at    TIMESTAMPTZ  DEFAULT NOW()
 );
 
@@ -16,12 +15,14 @@ CREATE TABLE users (
 -- raw_data is a JSON array of arrays (rows x quant columns).
 -- preview_data stores the first 10 rows with ALL original columns for preview.
 -- quality_report stores upload-time profile data for the dataset.
-CREATE TABLE datasets (
+CREATE TABLE IF NOT EXISTS datasets (
     id                    SERIAL PRIMARY KEY,
     user_id               INTEGER      REFERENCES users(id) ON DELETE CASCADE,
     original_filename     VARCHAR(255) NOT NULL,
     name                  TEXT,
     notes                 TEXT         DEFAULT '',
+    is_favorite           BOOLEAN      DEFAULT FALSE,
+    tags                  TEXT[]       DEFAULT ARRAY[]::TEXT[],
     saved_presets         JSONB        DEFAULT '[]'::jsonb,
     version_group_id      INTEGER,
     previous_version_id   INTEGER,
@@ -41,7 +42,7 @@ CREATE TABLE datasets (
 
 -- Stores PCA run results so the visualization can be fetched without re-computing.
 -- all_explained_variance stores variance for ALL components (for scree plot).
-CREATE TABLE pca_runs (
+CREATE TABLE IF NOT EXISTS pca_runs (
     id                       SERIAL PRIMARY KEY,
     dataset_id               INTEGER      REFERENCES datasets(id) ON DELETE CASCADE,
     notes                    TEXT         DEFAULT '',

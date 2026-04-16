@@ -1,8 +1,10 @@
 import { useEffect, useRef, useState } from "react";
-import { Link, useNavigate } from "react-router-dom";
+import { Link, useNavigate, useSearchParams } from "react-router-dom";
 import { getToken } from "../App";
+import { useToast } from "../components/AppFeedback";
 
 const apiBase = import.meta.env.VITE_API_URL || "";
+const savedSessionKey = "ms_compare_sessions";
 
 function authHeaders() {
   return { Authorization: `Bearer ${getToken()}` };
@@ -33,9 +35,24 @@ function formatSettingValue(value) {
   return value ?? "n/a";
 }
 
+function serializeIds(ids) {
+  return ids.map((id) => String(id)).join(",");
+}
+
+function parseIdList(value) {
+  return String(value ?? "")
+    .split(",")
+    .map((item) => item.trim())
+    .filter(Boolean)
+    .map((item) => Number(item))
+    .filter((item) => Number.isFinite(item));
+}
+
 export default function Compare() {
   const navigate = useNavigate();
   const plotRefs = useRef({});
+  const toast = useToast();
+  const [searchParams, setSearchParams] = useSearchParams();
 
   const [datasets, setDatasets] = useState([]);
   const [selectedDatasetIds, setSelectedDatasetIds] = useState([]);
@@ -48,6 +65,45 @@ export default function Compare() {
   const [loading, setLoading] = useState(true);
   const [detailLoading, setDetailLoading] = useState(false);
   const [error, setError] = useState("");
+  const [sessionName, setSessionName] = useState("");
+  const [savedSessions, setSavedSessions] = useState([]);
+  const [hydratedFromUrl, setHydratedFromUrl] = useState(false);
+
+  useEffect(() => {
+    try {
+      const parsed = JSON.parse(localStorage.getItem(savedSessionKey) || "[]");
+      setSavedSessions(Array.isArray(parsed) ? parsed : []);
+    } catch {
+      setSavedSessions([]);
+    }
+  }, []);
+
+  useEffect(() => {
+    if (loading || hydratedFromUrl) return;
+    const datasetIds = parseIdList(searchParams.get("datasets"));
+    const runIds = parseIdList(searchParams.get("runs"));
+    if (datasetIds.length > 0) {
+      setSelectedDatasetIds(datasetIds.filter((id) => datasets.some((dataset) => Number(dataset.id) === id)));
+    }
+    if (runIds.length > 0) {
+      setSelectedRunIds(runIds);
+    }
+    setHydratedFromUrl(true);
+  }, [datasets, hydratedFromUrl, loading, searchParams]);
+
+  useEffect(() => {
+    if (!hydratedFromUrl) return;
+    const next = new URLSearchParams(searchParams);
+    if (selectedDatasetIds.length > 0) next.set("datasets", serializeIds(selectedDatasetIds));
+    else next.delete("datasets");
+    if (selectedRunIds.length > 0) next.set("runs", serializeIds(selectedRunIds));
+    else next.delete("runs");
+    const currentText = searchParams.toString();
+    const nextText = next.toString();
+    if (currentText !== nextText) {
+      setSearchParams(next, { replace: true });
+    }
+  }, [hydratedFromUrl, searchParams, selectedDatasetIds, selectedRunIds, setSearchParams]);
 
   useEffect(() => {
     async function loadDatasets() {
@@ -251,6 +307,50 @@ export default function Compare() {
     );
   }
 
+  async function handleCopyShareLink() {
+    const params = new URLSearchParams();
+    if (selectedDatasetIds.length > 0) params.set("datasets", serializeIds(selectedDatasetIds));
+    if (selectedRunIds.length > 0) params.set("runs", serializeIds(selectedRunIds));
+    const url = `${window.location.origin}/compare${params.toString() ? `?${params.toString()}` : ""}`;
+    try {
+      await navigator.clipboard.writeText(url);
+      toast.success("The comparison link is ready to share.", "Link copied");
+    } catch {
+      toast.error("Could not copy the comparison link.");
+    }
+  }
+
+  function handleSaveSession() {
+    if (selectedDatasetIds.length === 0) {
+      toast.error("Choose at least one dataset before saving a comparison.");
+      return;
+    }
+    const session = {
+      id: `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+      name: sessionName.trim() || `Comparison ${savedSessions.length + 1}`,
+      datasetIds: selectedDatasetIds,
+      runIds: selectedRunIds,
+      updatedAt: new Date().toISOString(),
+    };
+    const next = [session, ...savedSessions].slice(0, 10);
+    setSavedSessions(next);
+    setSessionName("");
+    localStorage.setItem(savedSessionKey, JSON.stringify(next));
+    toast.success("You can reopen this comparison later from the saved sessions list.", "Comparison saved");
+  }
+
+  function handleLoadSession(session) {
+    setSelectedDatasetIds(session.datasetIds ?? []);
+    setSelectedRunIds(session.runIds ?? []);
+    toast.info(`Loaded "${session.name}".`, "Saved comparison");
+  }
+
+  function handleDeleteSession(sessionId) {
+    const next = savedSessions.filter((session) => session.id !== sessionId);
+    setSavedSessions(next);
+    localStorage.setItem(savedSessionKey, JSON.stringify(next));
+  }
+
   const selectedDatasets = datasets.filter((ds) => selectedDatasetIds.includes(ds.id));
   const allRuns = selectedDatasets.flatMap((ds) =>
     (datasetDetails[ds.id]?.runs ?? []).map((run) => ({ ...run, dataset: ds }))
@@ -267,7 +367,12 @@ export default function Compare() {
             correlations, explained variance, and PCA plots side-by-side.
           </p>
         </div>
-        <Link to="/projects" className="btn btn-ghost">Back to projects</Link>
+        <div className="compare-hero-actions">
+          <button className="btn btn-ghost" onClick={handleCopyShareLink} disabled={selectedDatasetIds.length === 0}>
+            Copy share link
+          </button>
+          <Link to="/projects" className="btn btn-ghost">Back to projects</Link>
+        </div>
       </section>
 
       {error && <div className="alert alert-error">{error}</div>}
@@ -295,6 +400,62 @@ export default function Compare() {
             ))}
           </div>
         )}
+      </section>
+
+      <section className="comparison-grid compare-session-grid">
+        <article className="card comparison-card">
+          <p className="eyebrow">Reusable comparisons</p>
+          <h3>Save this setup</h3>
+          <p className="muted">Keep a few named comparison views so you can revisit them without rebuilding the selection.</p>
+          <label className="field">
+            <span>Session name</span>
+            <input
+              type="text"
+              value={sessionName}
+              onChange={(event) => setSessionName(event.target.value)}
+              placeholder="Example: Clean baseline vs encoded labels"
+            />
+          </label>
+          <div className="action-btns">
+            <button className="btn btn-primary" onClick={handleSaveSession}>
+              Save comparison
+            </button>
+            <button className="btn btn-ghost" onClick={handleCopyShareLink} disabled={selectedDatasetIds.length === 0}>
+              Copy current link
+            </button>
+          </div>
+        </article>
+
+        <article className="card comparison-card">
+          <p className="eyebrow">Saved sessions</p>
+          <h3>Open a previous view</h3>
+          {savedSessions.length === 0 ? (
+            <p className="muted">No saved comparison sessions yet.</p>
+          ) : (
+            <div className="run-list">
+              {savedSessions.map((session) => (
+                <div key={session.id} className="run-item">
+                  <div>
+                    <strong>{session.name}</strong>
+                    <p className="muted">
+                      {session.datasetIds.length} dataset{session.datasetIds.length === 1 ? "" : "s"}
+                      {" "}· {session.runIds.length} run{session.runIds.length === 1 ? "" : "s"}
+                      {" "}· {new Date(session.updatedAt).toLocaleString()}
+                    </p>
+                  </div>
+                  <div className="action-btns">
+                    <button className="btn btn-small btn-primary" onClick={() => handleLoadSession(session)}>
+                      Open
+                    </button>
+                    <button className="btn btn-small btn-ghost" onClick={() => handleDeleteSession(session.id)}>
+                      Remove
+                    </button>
+                  </div>
+                </div>
+              ))}
+            </div>
+          )}
+        </article>
       </section>
 
       {detailLoading && <p className="muted">Loading comparison details...</p>}

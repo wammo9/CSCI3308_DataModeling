@@ -1,6 +1,7 @@
 import { useState, useEffect, useRef } from "react";
 import { useParams, useNavigate, Link } from "react-router-dom";
 import { getToken } from "../App";
+import { useToast } from "../components/AppFeedback";
 
 const apiBase = import.meta.env.VITE_API_URL || "";
 
@@ -68,6 +69,7 @@ export default function Visualize() {
   const plotRef = useRef(null);
   const screeRef = useRef(null);
   const loadingsRef = useRef(null);
+  const toast = useToast();
 
   const [run, setRun] = useState(null);
   const [error, setError] = useState("");
@@ -357,9 +359,9 @@ export default function Visualize() {
         setClusterData(data.clusters);
         setColorBy("cluster");
       }
-      else alert(data.message || "Could not cluster this PCA run.");
+      else toast.error(data.message || "Could not cluster this PCA run.");
     } catch {
-      alert("Could not reach the server.");
+      toast.error("Could not reach the server.");
     } finally {
       setClusterLoading(false);
     }
@@ -369,7 +371,7 @@ export default function Visualize() {
     try {
       const res = await fetch(`${apiBase}/api/pca/${runId}/report`, { headers: authHeaders() });
       if (!res.ok) {
-        alert("Could not create report.");
+        toast.error("Could not create report.");
         return;
       }
       const blob = await res.blob();
@@ -380,7 +382,7 @@ export default function Visualize() {
       a.click();
       URL.revokeObjectURL(url);
     } catch {
-      alert("Could not reach the server.");
+      toast.error("Could not reach the server.");
     }
   }
 
