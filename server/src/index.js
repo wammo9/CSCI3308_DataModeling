@@ -45,8 +45,14 @@ import bcrypt from 'bcryptjs';
 import jwt from 'jsonwebtoken';
 import multer from 'multer';
 import { parse } from 'csv-parse/sync';
+import { createRequire } from 'module';
+import { fileURLToPath } from 'url';
+import path from 'path';
 import pool from './db.js';
 import { runPCA } from './pca.js';
+
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
 
 const app = express();
 const port = process.env.PORT || 5001;
@@ -93,6 +99,66 @@ async function resolveUserId(req) {
 }
 
 async function ensureSchema() {
+  // Create tables if they don't exist (needed for fresh deployments like Render
+  // where Docker's docker-entrypoint-initdb.d doesn't run)
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS users (
+      id            SERIAL PRIMARY KEY,
+      username      VARCHAR(50)  UNIQUE NOT NULL,
+      password_hash CHAR(60)     NOT NULL,
+      display_name  TEXT         DEFAULT '',
+      email         VARCHAR(255),
+      created_at    TIMESTAMPTZ  DEFAULT NOW()
+    )
+  `);
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS datasets (
+      id                    SERIAL PRIMARY KEY,
+      user_id               INTEGER      REFERENCES users(id) ON DELETE CASCADE,
+      original_filename     VARCHAR(255) NOT NULL,
+      name                  TEXT,
+      notes                 TEXT         DEFAULT '',
+      is_favorite           BOOLEAN      DEFAULT FALSE,
+      tags                  TEXT[]       DEFAULT ARRAY[]::TEXT[],
+      saved_presets         JSONB        DEFAULT '[]'::jsonb,
+      version_group_id      INTEGER,
+      previous_version_id   INTEGER,
+      version_number        INTEGER      DEFAULT 1,
+      row_count             INTEGER,
+      column_count          INTEGER,
+      quantitative_columns  TEXT[],
+      categorical_columns   TEXT[],
+      all_columns           TEXT[],
+      raw_data              JSONB,
+      preview_data          JSONB,
+      row_metadata          JSONB,
+      quality_report        JSONB,
+      all_records           JSONB,
+      upload_timestamp      TIMESTAMPTZ  DEFAULT NOW()
+    )
+  `);
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS pca_runs (
+      id                       SERIAL PRIMARY KEY,
+      dataset_id               INTEGER      REFERENCES datasets(id) ON DELETE CASCADE,
+      notes                    TEXT         DEFAULT '',
+      is_pinned                BOOLEAN      DEFAULT FALSE,
+      n_components             INTEGER      NOT NULL,
+      explained_variance_ratio JSONB,
+      all_explained_variance   JSONB,
+      loadings                 JSONB,
+      transformed_data         JSONB,
+      column_names             TEXT[],
+      n_samples                INTEGER,
+      preprocessing_options    JSONB,
+      preprocessing_report     JSONB,
+      preprocessing_diff       JSONB,
+      row_indexes              JSONB,
+      created_at               TIMESTAMPTZ  DEFAULT NOW()
+    )
+  `);
+
+  // Migrate any columns that may be missing in older databases
   await pool.query('ALTER TABLE users ADD COLUMN IF NOT EXISTS display_name TEXT DEFAULT \'\'');
   await pool.query('ALTER TABLE users ADD COLUMN IF NOT EXISTS email VARCHAR(255)');
   await pool.query('ALTER TABLE datasets ADD COLUMN IF NOT EXISTS quality_report JSONB');
@@ -2855,6 +2921,17 @@ app.get('/api/pca/:id/export', requireAuth, async (req, res) => {
     return res.status(500).json({ status: 'error', message: 'Server error' });
   }
 });
+
+// ── Serve React client in production ─────────────────────────────────────────
+
+if (process.env.NODE_ENV === 'production') {
+  const clientDist = path.resolve(__dirname, '../../client/dist');
+  app.use(express.static(clientDist));
+  // Any route not matched by the API falls through to the React app
+  app.get('*', (_req, res) => {
+    res.sendFile(path.join(clientDist, 'index.html'));
+  });
+}
 
 // ── Start ─────────────────────────────────────────────────────────────────────
 
