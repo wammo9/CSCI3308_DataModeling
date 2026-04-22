@@ -32,6 +32,7 @@
  * GET    /api/datasets/:id/pca/compare compare two PCA runs     [auth]
  * GET    /api/datasets/:id/pca      list PCA runs for dataset   [auth]
  * GET    /api/pca/:id               fetch a single PCA result   [auth]
+ * GET    /api/pca/:id/narrative     interpret a PCA result      [auth]
  * PATCH  /api/pca/:id               update run notes / pin      [auth]
  * GET    /api/pca/:id/clusters      k-means clusters for run    [auth]
  * GET    /api/pca/:id/report        download PCA report         [auth]
@@ -1408,6 +1409,107 @@ function formatPct(value) {
   return `${(Number(value || 0) * 100).toFixed(1)}%`;
 }
 
+function formatSignedLoading(value) {
+  const numeric = Number(value || 0);
+  return `${numeric >= 0 ? '+' : ''}${numeric.toFixed(3)}`;
+}
+
+function buildNarrativeVarianceSummary(run) {
+  const ratios = Array.isArray(run.explained_variance_ratio) ? run.explained_variance_ratio : [];
+  const count = Math.min(Number(run.n_components || ratios.length || 0), ratios.length);
+  return ratios
+    .slice(0, count || ratios.length)
+    .map((value, index) => `- PC${index + 1}: ${formatPct(value)}`)
+    .join('\n');
+}
+
+function buildNarrativeLoadingsSummary(run) {
+  const columnNames = Array.isArray(run.column_names) ? run.column_names : [];
+  const loadings = Array.isArray(run.loadings) ? run.loadings : [];
+  const count = Math.min(Number(run.n_components || loadings.length || 0), loadings.length);
+
+  return loadings
+    .slice(0, count || loadings.length)
+    .map((component, componentIndex) => {
+      const entries = (Array.isArray(component) ? component : [])
+        .map((value, index) => ({
+          name: columnNames[index] || `Feature ${index + 1}`,
+          value: Number(value || 0),
+        }))
+        .filter((entry) => Number.isFinite(entry.value))
+        .sort((a, b) => Math.abs(b.value) - Math.abs(a.value))
+        .slice(0, 4);
+
+      const summary = entries.length
+        ? entries.map((entry) => `${entry.name} (${formatSignedLoading(entry.value)})`).join(', ')
+        : 'No loading data available.';
+
+      return `- PC${componentIndex + 1}: ${summary}`;
+    })
+    .join('\n');
+}
+
+function summarizeNarrativePreprocessing(options = {}) {
+  const parts = [];
+  if (Array.isArray(options.columns) && options.columns.length > 0) {
+    parts.push(`selected numeric columns: ${options.columns.join(', ')}`);
+  }
+  if (Array.isArray(options.categoricalColumns) && options.categoricalColumns.length > 0) {
+    parts.push(`encoded categorical columns: ${options.categoricalColumns.join(', ')}`);
+  }
+  if (options.missingValueStrategy) {
+    parts.push(`missing values: ${options.missingValueStrategy}`);
+  }
+  if (options.outlierMethod) {
+    parts.push(`outlier handling: ${options.outlierMethod}`);
+  }
+  if (options.scale !== undefined) {
+    parts.push(`scaling: ${options.scale ? 'on' : 'off'}`);
+  }
+  if (options.autoDropConstant !== undefined) {
+    parts.push(`drop constant columns: ${options.autoDropConstant ? 'on' : 'off'}`);
+  }
+  return parts.join('; ');
+}
+
+function buildPcaNarrativePrompt(run, dataset) {
+  const datasetName = dataset.name || dataset.original_filename || 'Untitled dataset';
+  const varianceSummary = buildNarrativeVarianceSummary(run) || '- Variance ratios unavailable';
+  const loadingSummary = buildNarrativeLoadingsSummary(run) || '- Loading data unavailable';
+  const preprocessingSummary = summarizeNarrativePreprocessing(run.preprocessing_options ?? {});
+
+  return [
+    `Dataset: ${datasetName}`,
+    `Rows used in PCA: ${Number(run.n_samples || 0)}`,
+    `Components generated: ${Number(run.n_components || 0)}`,
+    '',
+    'Explained variance per component:',
+    varianceSummary,
+    '',
+    'Top 4 loadings per component (sorted by absolute value):',
+    loadingSummary,
+    preprocessingSummary ? '' : null,
+    preprocessingSummary ? `Preprocessing context: ${preprocessingSummary}` : null,
+    '',
+    'Please interpret these PCA results for a user-facing analytics product.',
+    'Requirements:',
+    '- Give each principal component a short descriptive name based on its top loadings.',
+    '- Explain in 1-2 sentences what pattern each component captures.',
+    '- Recommend how many components to retain and why.',
+    '- Note any interesting patterns, tensions, or anomalies.',
+    '- Keep the full response concise at roughly 200-350 words.',
+    '- Return plain text only, with no markdown table or code fence.',
+  ].filter(Boolean).join('\n');
+}
+
+function extractGeminiText(payload) {
+  return (payload?.candidates ?? [])
+    .flatMap((candidate) => candidate?.content?.parts ?? [])
+    .map((part) => (typeof part?.text === 'string' ? part.text.trim() : ''))
+    .filter(Boolean)
+    .join('\n\n');
+}
+
 function sendHtmlReport(res, filename, html) {
   res.setHeader('Content-Type', 'text/html; charset=utf-8');
   res.setHeader('Content-Disposition', `attachment; filename="${filename}"`);
@@ -2766,6 +2868,114 @@ app.get('/api/pca/:id', requireAuth, async (req, res) => {
   } catch (err) {
     console.error('Get PCA run error:', err);
     return res.status(500).json({ status: 'error', message: 'Server error' });
+  }
+});
+
+app.get('/api/pca/:id/narrative', requireAuth, async (req, res) => {
+  const runId = parseInt(req.params.id, 10);
+  if (isNaN(runId)) {
+    return res.status(400).json({ status: 'error', message: 'Invalid run id' });
+  }
+
+  try {
+    const uid = await resolveUserId(req);
+    const runResult = await pool.query(
+      `SELECT r.id, r.dataset_id, r.loadings, r.explained_variance_ratio,
+              r.column_names, r.n_components, r.n_samples, r.preprocessing_options
+       FROM pca_runs r
+       JOIN datasets d ON d.id = r.dataset_id
+       WHERE r.id = $1 AND d.user_id = $2`,
+      [runId, uid]
+    );
+    if (!runResult.rows.length) {
+      return res.status(404).json({ status: 'error', message: 'PCA run not found' });
+    }
+
+    const run = runResult.rows[0];
+    const datasetResult = await pool.query(
+      `SELECT name, original_filename
+       FROM datasets
+       WHERE id = $1 AND user_id = $2`,
+      [run.dataset_id, uid]
+    );
+    if (!datasetResult.rows.length) {
+      return res.status(404).json({ status: 'error', message: 'Dataset not found' });
+    }
+
+    const apiKey = process.env.GEMINI_API_KEY || process.env.GOOGLE_API_KEY;
+    if (!apiKey) {
+      return res.status(200).json({
+        narrative: null,
+        error: 'AI narrative requires GEMINI_API_KEY or GOOGLE_API_KEY to be configured.',
+      });
+    }
+
+    const geminiResponse = await fetch('https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent', {
+      method: 'POST',
+      headers: {
+        'x-goog-api-key': apiKey,
+        'content-type': 'application/json',
+      },
+      body: JSON.stringify({
+        system_instruction: {
+          parts: [
+            {
+              text: 'You are a data science interpreter. Read PCA outputs and explain them clearly for users, with concise component naming and practical retention guidance.',
+            },
+          ],
+        },
+        contents: [
+          {
+            role: 'user',
+            parts: [
+              {
+                text: buildPcaNarrativePrompt(run, datasetResult.rows[0]),
+              },
+            ],
+          },
+        ],
+        generationConfig: {
+          temperature: 0.3,
+          maxOutputTokens: 450,
+        },
+      }),
+    });
+
+    const responseText = await geminiResponse.text();
+    let responsePayload = null;
+    try {
+      responsePayload = responseText ? JSON.parse(responseText) : null;
+    } catch {
+      responsePayload = null;
+    }
+
+    if (!geminiResponse.ok) {
+      const detail =
+        responsePayload?.error?.message ||
+        responsePayload?.message ||
+        responseText ||
+        `Gemini API returned status ${geminiResponse.status}`;
+      return res.status(502).json({ error: 'Narrative generation failed', detail });
+    }
+
+    const narrative = extractGeminiText(responsePayload);
+    if (!narrative) {
+      return res.status(502).json({
+        error: 'Narrative generation failed',
+        detail: 'Gemini API returned an empty response.',
+      });
+    }
+
+    return res.json({
+      narrative,
+      generated_at: new Date().toISOString(),
+    });
+  } catch (err) {
+    console.error('PCA narrative error:', err);
+    return res.status(502).json({
+      error: 'Narrative generation failed',
+      detail: err?.message || 'Unknown error',
+    });
   }
 });
 

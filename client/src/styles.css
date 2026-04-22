@@ -15,6 +15,8 @@
   --ink-strong: #1d2d2b;
   --ink: #314644;
   --muted: #6c7b75;
+  --text-primary: var(--ink-strong);
+  --text-muted: var(--muted);
 
   --primary-deep: #1f3b38;
   --primary: #29514c;
@@ -1720,6 +1722,37 @@ h3 {
 
 .viz-plot-card {
   padding: 1.5rem;
+}
+
+.narrative-card {
+  margin-top: 1rem;
+  padding: 1.5rem;
+  border-radius: var(--radius-md);
+  border: 1px solid var(--border);
+  background: #fff;
+  box-shadow: var(--shadow-sm);
+}
+
+.narrative-text {
+  margin: 0;
+  font-family: var(--font-body);
+  line-height: 1.75;
+  color: var(--text-primary);
+  white-space: pre-wrap;
+}
+
+.narrative-meta {
+  display: inline-block;
+  margin-top: 0.75rem;
+  font-size: 0.75rem;
+  color: var(--text-muted);
+}
+
+.narrative-loading {
+  margin: 0;
+  color: var(--text-muted);
+  font-style: italic;
+  text-align: center;
 }
 
 .cluster-summary,

@@ -218,6 +218,22 @@ describe('Export PCA results', () => {
   });
 });
 
+describe('PCA Narrative route', () => {
+  it('GET /api/pca/invalid/narrative with a non-numeric id returns 400', async () => {
+    const token = await makeToken();
+    const res = await request(server)
+      .get('/api/pca/invalid/narrative')
+      .set('Authorization', `Bearer ${token}`);
+    assert.equal(res.status, 400);
+    assert.ok(res.body.message.toLowerCase().includes('invalid'));
+  });
+
+  it('GET /api/pca/999/narrative without a token returns 401', async () => {
+    const res = await request(server).get('/api/pca/999/narrative');
+    assert.equal(res.status, 401);
+  });
+});
+
 // ── Health & features ────────────────────────────────────────────────────────
 
 describe('API info routes', () => {
