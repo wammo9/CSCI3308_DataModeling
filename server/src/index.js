@@ -48,12 +48,41 @@ import multer from 'multer';
 import { parse } from 'csv-parse/sync';
 import { createRequire } from 'module';
 import { fileURLToPath } from 'url';
+import fs from 'fs';
 import path from 'path';
 import pool from './db.js';
 import { runPCA } from './pca.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
+
+function loadOptionalEnvFile() {
+  const envPath = path.resolve(__dirname, '../.env');
+  if (!fs.existsSync(envPath)) return;
+
+  const lines = fs.readFileSync(envPath, 'utf8').split(/\r?\n/);
+  for (const rawLine of lines) {
+    const line = rawLine.trim();
+    if (!line || line.startsWith('#')) continue;
+
+    const match = line.match(/^([A-Za-z_][A-Za-z0-9_]*)\s*=\s*(.*)$/);
+    if (!match) continue;
+
+    const [, key, rawValue] = match;
+    if (process.env[key] !== undefined) continue;
+
+    let value = rawValue.trim();
+    if (
+      (value.startsWith('"') && value.endsWith('"')) ||
+      (value.startsWith('\'') && value.endsWith('\''))
+    ) {
+      value = value.slice(1, -1);
+    }
+    process.env[key] = value;
+  }
+}
+
+loadOptionalEnvFile();
 
 const app = express();
 const port = process.env.PORT || 5001;
@@ -1510,6 +1539,83 @@ function extractGeminiText(payload) {
     .join('\n\n');
 }
 
+function geminiFinishReason(payload) {
+  return payload?.candidates?.[0]?.finishReason || '';
+}
+
+function narrativeLooksTruncated(narrative, payload) {
+  const text = String(narrative ?? '').trim();
+  const finishReason = geminiFinishReason(payload);
+  if (!text) return true;
+  if (finishReason === 'MAX_TOKENS') return true;
+  if (text.length < 140) return true;
+  if (/Component\s+\d+:\s*$/i.test(text)) return true;
+  if (/[,:;\-]\s*$/.test(text)) return true;
+  return false;
+}
+
+async function requestGeminiNarrative(apiKey, prompt, options = {}) {
+  const geminiResponse = await fetch('https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent', {
+    method: 'POST',
+    headers: {
+      'x-goog-api-key': apiKey,
+      'content-type': 'application/json',
+    },
+    body: JSON.stringify({
+      system_instruction: {
+        parts: [
+          {
+            text: 'You are a data science interpreter. Read PCA outputs and explain them clearly for users, with concise component naming and practical retention guidance.',
+          },
+        ],
+      },
+      contents: [
+        {
+          role: 'user',
+          parts: [
+            {
+              text: prompt,
+            },
+          ],
+        },
+      ],
+      generationConfig: {
+        temperature: options.temperature ?? 0.3,
+        maxOutputTokens: options.maxOutputTokens ?? 1024,
+        thinkingConfig: {
+          thinkingBudget: options.thinkingBudget ?? 0,
+        },
+      },
+    }),
+  });
+
+  const responseText = await geminiResponse.text();
+  let responsePayload = null;
+  try {
+    responsePayload = responseText ? JSON.parse(responseText) : null;
+  } catch {
+    responsePayload = null;
+  }
+
+  return {
+    geminiResponse,
+    responseText,
+    responsePayload,
+    narrative: extractGeminiText(responsePayload),
+  };
+}
+
+function resolveGeminiApiKey() {
+  return [
+    process.env.GEMINI_API_KEY,
+    process.env.GOOGLE_API_KEY,
+    process.env.GOOGLE_GENAI_API_KEY,
+    process.env.GENAI_API_KEY,
+  ]
+    .map((value) => String(value ?? '').trim())
+    .find(Boolean) || null;
+}
+
 function sendHtmlReport(res, filename, html) {
   res.setHeader('Content-Type', 'text/html; charset=utf-8');
   res.setHeader('Content-Disposition', `attachment; filename="${filename}"`);
@@ -2902,63 +3008,43 @@ app.get('/api/pca/:id/narrative', requireAuth, async (req, res) => {
       return res.status(404).json({ status: 'error', message: 'Dataset not found' });
     }
 
-    const apiKey = process.env.GEMINI_API_KEY || process.env.GOOGLE_API_KEY;
+    const apiKey = resolveGeminiApiKey();
     if (!apiKey) {
       return res.status(200).json({
         narrative: null,
-        error: 'AI narrative requires GEMINI_API_KEY or GOOGLE_API_KEY to be configured.',
+        error: 'AI narrative requires a server environment variable named GEMINI_API_KEY, GOOGLE_API_KEY, GOOGLE_GENAI_API_KEY, or GENAI_API_KEY.',
       });
     }
 
-    const geminiResponse = await fetch('https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent', {
-      method: 'POST',
-      headers: {
-        'x-goog-api-key': apiKey,
-        'content-type': 'application/json',
-      },
-      body: JSON.stringify({
-        system_instruction: {
-          parts: [
-            {
-              text: 'You are a data science interpreter. Read PCA outputs and explain them clearly for users, with concise component naming and practical retention guidance.',
-            },
-          ],
-        },
-        contents: [
-          {
-            role: 'user',
-            parts: [
-              {
-                text: buildPcaNarrativePrompt(run, datasetResult.rows[0]),
-              },
-            ],
-          },
-        ],
-        generationConfig: {
-          temperature: 0.3,
-          maxOutputTokens: 450,
-        },
-      }),
+    const basePrompt = buildPcaNarrativePrompt(run, datasetResult.rows[0]);
+    let geminiResult = await requestGeminiNarrative(apiKey, basePrompt, {
+      maxOutputTokens: 1024,
+      thinkingBudget: 0,
+      temperature: 0.3,
     });
 
-    const responseText = await geminiResponse.text();
-    let responsePayload = null;
-    try {
-      responsePayload = responseText ? JSON.parse(responseText) : null;
-    } catch {
-      responsePayload = null;
+    if (
+      geminiResult.geminiResponse.ok &&
+      narrativeLooksTruncated(geminiResult.narrative, geminiResult.responsePayload)
+    ) {
+      const retryPrompt = `${basePrompt}\n\nImportant: finish the complete response. Do not stop after a heading, label, or the first component. End with fully written sentences.`;
+      geminiResult = await requestGeminiNarrative(apiKey, retryPrompt, {
+        maxOutputTokens: 2048,
+        thinkingBudget: 0,
+        temperature: 0.2,
+      });
     }
 
-    if (!geminiResponse.ok) {
+    if (!geminiResult.geminiResponse.ok) {
       const detail =
-        responsePayload?.error?.message ||
-        responsePayload?.message ||
-        responseText ||
-        `Gemini API returned status ${geminiResponse.status}`;
+        geminiResult.responsePayload?.error?.message ||
+        geminiResult.responsePayload?.message ||
+        geminiResult.responseText ||
+        `Gemini API returned status ${geminiResult.geminiResponse.status}`;
       return res.status(502).json({ error: 'Narrative generation failed', detail });
     }
 
-    const narrative = extractGeminiText(responsePayload);
+    const narrative = geminiResult.narrative;
     if (!narrative) {
       return res.status(502).json({
         error: 'Narrative generation failed',

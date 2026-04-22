@@ -92,6 +92,7 @@ export default function Visualize() {
   const [narrativeLoading, setNarrativeLoading] = useState(false);
   const [narrativeLoaded, setNarrativeLoaded] = useState(false);
   const [narrativeUnavailable, setNarrativeUnavailable] = useState(false);
+  const [narrativeUnavailableMessage, setNarrativeUnavailableMessage] = useState("");
   const [narrativeError, setNarrativeError] = useState("");
 
   useEffect(() => {
@@ -123,6 +124,7 @@ export default function Visualize() {
     setNarrativeLoading(false);
     setNarrativeLoaded(false);
     setNarrativeUnavailable(false);
+    setNarrativeUnavailableMessage("");
     setNarrativeError("");
   }, [runId]);
 
@@ -403,6 +405,8 @@ export default function Visualize() {
 
     setNarrativeLoading(true);
     setNarrativeError("");
+    setNarrativeUnavailable(false);
+    setNarrativeUnavailableMessage("");
     try {
       const res = await fetch(`${apiBase}/api/pca/${runId}/narrative`, {
         headers: authHeaders(),
@@ -418,6 +422,7 @@ export default function Visualize() {
       setNarrative(data.narrative ?? null);
       setNarrativeGeneratedAt(data.generated_at || "");
       setNarrativeUnavailable(data.narrative == null);
+      setNarrativeUnavailableMessage(data.error || "AI narrative is not configured for this deployment.");
       setNarrativeLoaded(true);
     } catch {
       setNarrativeError("Could not reach the server.");
@@ -891,7 +896,7 @@ export default function Visualize() {
             {narrativeLoading && <p className="narrative-loading">Interpreting PCA structure…</p>}
             {!narrativeLoading && narrativeError && <div className="alert alert-error">{narrativeError}</div>}
             {!narrativeLoading && !narrativeError && narrativeUnavailable && (
-              <p className="muted">AI narrative is not configured for this deployment.</p>
+              <p className="muted">{narrativeUnavailableMessage || "AI narrative is not configured for this deployment."}</p>
             )}
             {!narrativeLoading && !narrativeError && narrative && (
               <>
