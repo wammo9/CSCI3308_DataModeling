@@ -1,0 +1,134 @@
+<svg width="1920" height="1080" viewBox="0 0 1920 1080" fill="none" xmlns="http://www.w3.org/2000/svg" role="img" aria-labelledby="title desc">
+  <title id="title">ModelScope System Architecture</title>
+  <desc id="desc">A presentation-ready architecture diagram showing the user, React frontend, Express backend, PostgreSQL database, and Gemini AI service.</desc>
+
+  <defs>
+    <linearGradient id="pageBg" x1="140" y1="70" x2="1780" y2="1040" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#FBF6EC"/>
+      <stop offset="1" stop-color="#EFE6D8"/>
+    </linearGradient>
+    <linearGradient id="headerWash" x1="120" y1="90" x2="1780" y2="220" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#E7F2EC"/>
+      <stop offset="1" stop-color="#F7EEDC"/>
+    </linearGradient>
+    <filter id="shadow" x="-60" y="-60" width="130%" height="140%" color-interpolation-filters="sRGB">
+      <feDropShadow dx="0" dy="16" stdDeviation="24" flood-color="#CDBFAE" flood-opacity="0.28"/>
+    </filter>
+    <marker id="arrow" markerWidth="14" markerHeight="14" refX="11.5" refY="7" orient="auto">
+      <path d="M2 2L11.5 7L2 12" fill="none" stroke="#29514C" stroke-width="2.8" stroke-linecap="round" stroke-linejoin="round"/>
+    </marker>
+    <style>
+      .display { font-family: "Iowan Old Style", "Palatino Linotype", Georgia, serif; }
+      .body { font-family: Inter, "SF Pro Text", "Helvetica Neue", Arial, sans-serif; }
+      .eyebrow { fill: #6B817A; font-size: 16px; font-weight: 700; letter-spacing: 0.14em; text-transform: uppercase; }
+      .title { fill: #1F3B38; font-size: 62px; font-weight: 700; }
+      .subtitle { fill: #4E635D; font-size: 24px; font-weight: 500; }
+      .label { fill: #6B817A; font-size: 17px; font-weight: 700; letter-spacing: 0.08em; text-transform: uppercase; }
+      .cardTitle { fill: #20312F; font-size: 34px; font-weight: 700; }
+      .tech { fill: #29514C; font-size: 22px; font-weight: 700; }
+      .bullet { fill: #20312F; font-size: 23px; font-weight: 600; }
+      .note { fill: #5B6C68; font-size: 20px; font-weight: 500; }
+      .caption { fill: #6B817A; font-size: 17px; font-weight: 700; letter-spacing: 0.08em; text-transform: uppercase; }
+      .footer { fill: #5B6C68; font-size: 21px; font-weight: 500; }
+      .footerNote { fill: #5B6C68; font-size: 18px; font-weight: 500; }
+    </style>
+  </defs>
+
+  <rect width="1920" height="1080" rx="40" fill="url(#pageBg)"/>
+  <rect x="28" y="28" width="1864" height="1024" rx="34" fill="#FBF7F0" stroke="#E4D8C9" stroke-width="2"/>
+  <rect x="72" y="72" width="1776" height="126" rx="28" fill="url(#headerWash)"/>
+
+  <text x="104" y="112" class="eyebrow body">Architecture Overview</text>
+  <text x="104" y="160" class="title display">ModelScope System Architecture</text>
+  <text x="104" y="198" class="subtitle body">
+    <tspan x="104" dy="0">A cleaner view of how the product moves from browser interactions to API logic, persistent storage,</tspan>
+    <tspan x="104" dy="30">and AI-generated PCA interpretation.</tspan>
+  </text>
+
+  <!-- User -->
+  <g filter="url(#shadow)">
+    <rect x="84" y="318" width="256" height="352" rx="30" fill="#FFFDF8" stroke="#DCCFBE" stroke-width="2"/>
+  </g>
+  <text x="122" y="372" class="label body">User</text>
+  <text x="122" y="412" class="cardTitle body">Browser</text>
+  <text x="122" y="446" class="tech body">Interactive workflow</text>
+  <text x="122" y="516" class="bullet body">• Upload datasets</text>
+  <text x="122" y="560" class="bullet body">• Configure PCA runs</text>
+  <text x="122" y="604" class="bullet body">• Explore visual results</text>
+  <text x="122" y="648" class="bullet body">• Export reports</text>
+
+  <!-- Frontend -->
+  <g filter="url(#shadow)">
+    <rect x="412" y="264" width="460" height="460" rx="34" fill="#EEF5F1" stroke="#BED0C8" stroke-width="2"/>
+  </g>
+  <text x="452" y="320" class="label body">Frontend</text>
+  <text x="452" y="362" class="cardTitle body">React Application</text>
+  <text x="452" y="396" class="tech body">React + Vite + Plotly + Router</text>
+  <text x="452" y="476" class="bullet body">• Navigation and protected state</text>
+  <text x="452" y="522" class="bullet body">• Workspace, forms, and settings</text>
+  <text x="452" y="568" class="bullet body">• 2D/3D PCA visualizations</text>
+  <text x="452" y="614" class="bullet body">• Search, filters, and point details</text>
+  <text x="452" y="678" class="note body">
+    <tspan x="452" dy="0">Presents a calm interface for an otherwise</tspan>
+    <tspan x="452" dy="28">technical analysis workflow.</tspan>
+  </text>
+
+  <!-- Backend -->
+  <g filter="url(#shadow)">
+    <rect x="944" y="264" width="510" height="460" rx="34" fill="#F1F7F3" stroke="#BED0C8" stroke-width="2"/>
+  </g>
+  <text x="986" y="320" class="label body">Backend</text>
+  <text x="986" y="362" class="cardTitle body">Express API</text>
+  <text x="986" y="396" class="tech body">Express + JWT + ES Modules</text>
+  <text x="986" y="476" class="bullet body">• Auth, profiles, and route protection</text>
+  <text x="986" y="522" class="bullet body">• CSV ingest, validation, and quality checks</text>
+  <text x="986" y="568" class="bullet body">• PCA pipeline, loadings, and clustering</text>
+  <text x="986" y="614" class="bullet body">• Comparison, exports, and AI requests</text>
+  <text x="986" y="678" class="note body">
+    <tspan x="986" dy="0">Owns the product logic, statistical computation,</tspan>
+    <tspan x="986" dy="28">and orchestration behind every run.</tspan>
+  </text>
+
+  <!-- PostgreSQL -->
+  <g filter="url(#shadow)">
+    <rect x="1518" y="286" width="312" height="190" rx="30" fill="#F4FAF6" stroke="#BED0C8" stroke-width="2"/>
+  </g>
+  <text x="1554" y="336" class="label body">Persistence</text>
+  <text x="1554" y="376" class="cardTitle body">PostgreSQL</text>
+  <text x="1554" y="408" class="tech body">Application data</text>
+  <text x="1554" y="452" class="bullet body">• Users and datasets</text>
+  <text x="1554" y="490" class="bullet body">• PCA runs and presets</text>
+
+  <!-- Gemini -->
+  <g filter="url(#shadow)">
+    <rect x="1518" y="510" width="312" height="190" rx="30" fill="#EAF4F0" stroke="#BED0C8" stroke-width="2"/>
+  </g>
+  <text x="1554" y="560" class="label body">AI Layer</text>
+  <text x="1554" y="600" class="cardTitle body">Gemini API</text>
+  <text x="1554" y="632" class="tech body">Narrative interpreter</text>
+  <text x="1554" y="676" class="bullet body">• PCA summaries</text>
+  <text x="1554" y="714" class="bullet body">• Retention guidance</text>
+
+  <!-- Uniform arrows -->
+  <path d="M340 494H412" stroke="#29514C" stroke-width="6" stroke-linecap="round" marker-end="url(#arrow)"/>
+  <path d="M872 494H944" stroke="#29514C" stroke-width="6" stroke-linecap="round" marker-end="url(#arrow)"/>
+  <path d="M1454 381H1518" stroke="#29514C" stroke-width="6" stroke-linecap="round" marker-end="url(#arrow)"/>
+  <path d="M1454 605H1518" stroke="#29514C" stroke-width="6" stroke-linecap="round" marker-end="url(#arrow)"/>
+
+  <!-- Footer -->
+  <rect x="84" y="816" width="1746" height="186" rx="30" fill="#FFFDF8" stroke="#DED1C1" stroke-width="2"/>
+  <text x="122" y="864" class="caption body">Core Flow</text>
+  <text x="122" y="922" class="footer body">Upload data</text>
+  <path d="M260 914H336" stroke="#6B817A" stroke-width="4" stroke-linecap="round" marker-end="url(#arrow)"/>
+  <text x="370" y="922" class="footer body">Validate and prepare</text>
+  <path d="M612 914H688" stroke="#6B817A" stroke-width="4" stroke-linecap="round" marker-end="url(#arrow)"/>
+  <text x="722" y="922" class="footer body">Run PCA and cluster</text>
+  <path d="M986 914H1062" stroke="#6B817A" stroke-width="4" stroke-linecap="round" marker-end="url(#arrow)"/>
+  <text x="1096" y="922" class="footer body">Visualize and compare</text>
+  <path d="M1404 914H1480" stroke="#6B817A" stroke-width="4" stroke-linecap="round" marker-end="url(#arrow)"/>
+  <text x="1514" y="922" class="footer body">Explain and export</text>
+  <text x="122" y="972" class="footerNote body">
+    <tspan x="122" dy="0">Frontend for usability.</tspan>
+    <tspan x="344" dy="0">Backend for validation, computation, storage, and AI interpretation.</tspan>
+  </text>
+</svg>
